@@ -1,0 +1,9 @@
+{
+  "name": "nfc-event-badges-app",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Android app for the NFC Event Badges WordPress plugin",
+  "scripts": {
+    "sync-ui": "node scripts/make-www.js"
+  }
+}

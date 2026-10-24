@@ -1,0 +1,1448 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex,nofollow">
+<meta name="theme-color" content="#6C5CE7">
+<meta name="mobile-web-app-capable" content="yes">
+<title>Badge Host</title>
+<style>
+:root{--bg:#f6f6fb;--card:#fff;--text:#1d1d2b;--muted:#6b6b80;--pri:#6C5CE7;--pri-t:#fff;--ok:#00a37a;--warn:#d98200;--bad:#d63031;--line:#e4e4ee;color-scheme:light dark}
+@media (prefers-color-scheme:dark){:root{--bg:#12121a;--card:#1c1c28;--text:#f0f0f7;--muted:#9a9ab0;--line:#2c2c3c}}
+*{box-sizing:border-box}
+body{margin:0;font:16px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--text);padding-top:env(safe-area-inset-top)}
+#app{max-width:560px;margin:0 auto;padding:16px 16px calc(88px + env(safe-area-inset-bottom))}
+h1{font-size:22px;margin:8px 0 4px}h2{font-size:17px;margin:0 0 8px}
+.sub{color:var(--muted);margin:0 0 14px;font-size:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:14px}
+label{display:block;font-size:13px;color:var(--muted);margin:10px 0 4px}
+input,select,textarea{width:100%;padding:12px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--text);font:inherit}
+input[type=color]{padding:2px;height:44px}
+textarea{min-height:64px;resize:vertical}
+button{font:inherit;border:0;border-radius:12px;padding:13px 16px;background:var(--pri);color:var(--pri-t);font-weight:600;cursor:pointer;width:100%;margin-top:10px}
+button.sec{background:transparent;color:var(--pri);border:1px solid var(--pri)}
+button.danger{background:var(--bad)}
+button.sm{width:auto;padding:8px 12px;margin:8px 8px 0 0;font-size:14px}
+button:disabled{opacity:.5}
+nav{position:fixed;left:0;right:0;bottom:0;display:flex;background:var(--card);border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom)}
+nav button{flex:1;background:none;color:var(--muted);border-radius:0;margin:0;padding:10px 4px;font-size:12px;font-weight:500}
+nav button span{display:block;font-size:22px}
+nav button.on{color:var(--pri)}
+.res{border-radius:12px;padding:12px;margin-bottom:10px;border:2px solid var(--line);background:var(--card)}
+.res.ok{border-color:var(--ok)}.res.warn{border-color:var(--warn)}.res.bad{border-color:var(--bad)}
+.dot{width:44px;height:44px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:24px;flex:none;overflow:hidden}
+.row{display:flex;gap:12px;align-items:center;margin:10px 0}
+.tag{font-size:11px;background:var(--line);border-radius:6px;padding:2px 6px;margin-left:6px;font-weight:400}
+.pulse{animation:p 1.2s infinite}@keyframes p{50%{opacity:.45}}
+details summary{cursor:pointer;margin-top:12px}
+#toast{position:fixed;left:50%;transform:translateX(-50%);bottom:96px;background:#222;color:#fff;padding:10px 16px;border-radius:10px;opacity:0;pointer-events:none;transition:opacity .2s;max-width:90%;text-align:center;z-index:9}
+#toast.on{opacity:1}
+</style>
+</head>
+<body>
+<div id="app"><p class="sub" style="padding:24px">Loading&hellip;</p></div>
+<div id="toast"></div>
+<script>
+/* Minimal QR code generator (byte mode, error correction L, versions 1-10). window.nebQR(text) -> { size, get(x,y) } */
+(function () {
+	'use strict';
+	var DATA = [0, 19, 34, 55, 80, 108, 136, 156, 194, 232, 274];
+	var ECC = [0, 7, 10, 15, 20, 26, 18, 20, 24, 30, 18];
+	var BLOCKS = [0, 1, 1, 1, 1, 1, 2, 2, 2, 2, 4];
+	var ALIGN = [null, [], [6, 18], [6, 22], [6, 26], [6, 30], [6, 34], [6, 22, 38], [6, 24, 42], [6, 26, 46], [6, 28, 50]];
+	var EXP = [], LOG = [], i, x = 1;
+	for (i = 0; i < 255; i++) { EXP[i] = x; LOG[x] = i; x <<= 1; if (x & 256) { x ^= 0x11d; } }
+	function mul(a, b) { return a && b ? EXP[(LOG[a] + LOG[b]) % 255] : 0; }
+	function rs(data, n) {
+		var gen = [1], j, k;
+		for (j = 0; j < n; j++) {
+			var next = new Array(gen.length + 1).fill(0);
+			for (k = 0; k < gen.length; k++) { next[k] ^= gen[k]; next[k + 1] ^= mul(gen[k], EXP[j]); }
+			gen = next;
+		}
+		var res = new Array(n).fill(0);
+		data.forEach(function (d) {
+			var f = d ^ res.shift(); res.push(0);
+			for (var m = 0; m < n; m++) { res[m] ^= mul(gen[m + 1], f); }
+		});
+		return res;
+	}
+	function utf8(s) { return Array.prototype.slice.call(new TextEncoder().encode(s)); }
+	function bch(value, poly, bits, top) {
+		var v = value << bits;
+		for (var b = top; b >= bits; b--) { if (v & (1 << b)) { v ^= poly << (b - bits); } }
+		return v;
+	}
+	window.nebQR = function (text) {
+		var bytes = utf8(text), ver = 0, v;
+		for (v = 1; v <= 10; v++) { var cap = DATA[v] - (v < 10 ? 2 : 3); if (bytes.length <= cap) { ver = v; break; } }
+		if (!ver) { throw new Error('Text too long for QR'); }
+		var bits = [];
+		function put(val, len) { for (var b = len - 1; b >= 0; b--) { bits.push((val >> b) & 1); } }
+		put(4, 4); put(bytes.length, ver < 10 ? 8 : 16);
+		bytes.forEach(function (b) { put(b, 8); });
+		var total = DATA[ver] * 8;
+		put(0, Math.min(4, total - bits.length));
+		while (bits.length % 8) { bits.push(0); }
+		var cw = [];
+		for (i = 0; i < bits.length; i += 8) { var n = 0; for (var b = 0; b < 8; b++) { n = (n << 1) | bits[i + b]; } cw.push(n); }
+		for (var pad = 0; cw.length < DATA[ver]; pad++) { cw.push(pad % 2 ? 0x11 : 0xec); }
+		var nb = BLOCKS[ver], base = Math.floor(DATA[ver] / nb), extra = DATA[ver] % nb, blocks = [], ecs = [], pos = 0;
+		for (i = 0; i < nb; i++) {
+			var len = base + (i >= nb - extra ? 1 : 0), d = cw.slice(pos, pos + len); pos += len;
+			blocks.push(d); ecs.push(rs(d, ECC[ver]));
+		}
+		var out = [], maxd = base + (extra ? 1 : 0), j;
+		for (j = 0; j < maxd; j++) { blocks.forEach(function (bl) { if (j < bl.length) { out.push(bl[j]); } }); }
+		for (j = 0; j < ECC[ver]; j++) { ecs.forEach(function (e) { out.push(e[j]); }); }
+		var size = 17 + 4 * ver, M = [], R = [];
+		for (i = 0; i < size; i++) { M.push(new Array(size).fill(0)); R.push(new Array(size).fill(false)); }
+		function set(r, c, val) { if (r >= 0 && c >= 0 && r < size && c < size) { M[r][c] = val ? 1 : 0; R[r][c] = true; } }
+		function finder(r, c) {
+			for (var dr = -1; dr <= 7; dr++) { for (var dc = -1; dc <= 7; dc++) {
+				var on = dr >= 0 && dr <= 6 && dc >= 0 && dc <= 6 && (dr === 0 || dr === 6 || dc === 0 || dc === 6 || (dr >= 2 && dr <= 4 && dc >= 2 && dc <= 4));
+				set(r + dr, c + dc, on);
+			} }
+		}
+		finder(0, 0); finder(0, size - 7); finder(size - 7, 0);
+		var al = ALIGN[ver];
+		al.forEach(function (r) { al.forEach(function (c) {
+			if (R[r][c]) { return; }
+			for (var dr = -2; dr <= 2; dr++) { for (var dc = -2; dc <= 2; dc++) { set(r + dr, c + dc, Math.max(Math.abs(dr), Math.abs(dc)) !== 1); } }
+		}); });
+		for (i = 8; i < size - 8; i++) { set(6, i, i % 2 === 0); set(i, 6, i % 2 === 0); }
+		set(size - 8, 8, 1);
+		for (i = 0; i < 9; i++) { if (!R[8][i]) { set(8, i, 0); } if (!R[i][8]) { set(i, 8, 0); } }
+		for (i = 0; i < 8; i++) { if (!R[8][size - 1 - i]) { set(8, size - 1 - i, 0); } if (!R[size - 1 - i][8]) { set(size - 1 - i, 8, 0); } }
+		if (ver >= 7) {
+			var vi = (ver << 12) | bch(ver, 0x1f25, 12, 17);
+			for (i = 0; i < 18; i++) {
+				var bit = (vi >> i) & 1, a = Math.floor(i / 3), bb = i % 3 + size - 11;
+				set(a, bb, bit); set(bb, a, bit);
+			}
+		}
+		/* data placement */
+		var bitIdx = 0, up = true, col, row, dc2;
+		var stream = [];
+		out.forEach(function (byte) { for (var b = 7; b >= 0; b--) { stream.push((byte >> b) & 1); } });
+		for (col = size - 1; col > 0; col -= 2) {
+			if (col === 6) { col--; }
+			for (i = 0; i < size; i++) {
+				row = up ? size - 1 - i : i;
+				for (dc2 = 0; dc2 < 2; dc2++) {
+					var c = col - dc2;
+					if (R[row][c]) { continue; }
+					var bitv = bitIdx < stream.length ? stream[bitIdx++] : 0;
+					if ((row + c) % 2 === 0) { bitv ^= 1; }
+					M[row][c] = bitv;
+				}
+			}
+			up = !up;
+		}
+		/* format info: EC level L (01), mask 0 */
+		var fmt = (((1 << 3) | 0) << 10 | bch((1 << 3) | 0, 0x537, 10, 14)) ^ 0x5412;
+		for (i = 0; i < 15; i++) {
+			var fb = (fmt >> i) & 1;
+			if (i < 6) { M[i][8] = fb; } else if (i < 8) { M[i + 1][8] = fb; } else { M[size - 15 + i][8] = fb; }
+			if (i < 8) { M[8][size - 1 - i] = fb; } else if (i < 9) { M[8][15 - i] = fb; } else { M[8][14 - i] = fb; }
+		}
+		return { size: size, version: ver, get: function (r, c) { return !!M[r][c]; } };
+	};
+	window.nebQRSvg = function (text, px) {
+		var q = window.nebQR(text), n = q.size + 8, d = '', r, c;
+		for (r = 0; r < q.size; r++) { for (c = 0; c < q.size; c++) { if (q.get(r, c)) { d += 'M' + (c + 4) + ' ' + (r + 4) + 'h1v1h-1z'; } } }
+		return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + n + ' ' + n + '" width="' + (px || 240) + '" height="' + (px || 240) + '" shape-rendering="crispEdges"><rect width="100%" height="100%" fill="#fff"/><path d="' + d + '" fill="#000"/></svg>';
+	};
+})();
+
+</script>
+<script>
+/* ===== Part 1: runs before the app. Pairing, networking and deep links. ===== */
+(function () {
+	'use strict';
+	var KEY = 'neb_site';
+	function load() { try { return JSON.parse(localStorage.getItem(KEY) || 'null') || {}; } catch (e) { return {}; } }
+	var saved = load();
+	window.NEBAPP = {
+		site: saved.site || '', api: saved.api || '', name: saved.name || '',
+		save: function (o) { try { localStorage.setItem(KEY, JSON.stringify(o)); } catch (e) {} },
+		clear: function () { try { localStorage.removeItem(KEY); localStorage.removeItem('neb_token'); } catch (e) {} }
+	};
+
+	/* All network calls go through the phone's native code, so the site needs no CORS settings. */
+	var pending = {}, seq = 0, realFetch = window.fetch;
+	window.__nebHttp = function (id, status, body) {
+		var p = pending[id]; if (!p) { return; } delete pending[id];
+		if (status <= 0) { p.rej(new TypeError(body || 'Network error')); return; }
+		var empty = status === 204 || status === 205 || status === 304;
+		p.res(new Response(empty ? null : body, { status: status, headers: { 'Content-Type': 'application/json' } }));
+	};
+	window.fetch = function (url, opts) {
+		url = String(url);
+		if (!window.NebNative || !/^https:\/\//i.test(url)) { return realFetch.apply(window, arguments); }
+		opts = opts || {};
+		return new Promise(function (res, rej) {
+			var id = String(++seq); pending[id] = { res: res, rej: rej };
+			NebNative.http(id, opts.method || 'GET', url, JSON.stringify(opts.headers || {}), opts.body == null ? '' : String(opts.body));
+		});
+	};
+
+	/* Turns what a person types or scans into a site address. */
+	window.nebNormalizeSite = function (v) {
+		v = String(v || '').trim();
+		var m = v.match(/[?&]site=([^&]+)/);
+		if (/^nebbadges:/i.test(v) && m) { v = decodeURIComponent(m[1]); }
+		if (!v) { return ''; }
+		if (!/^[a-z]+:\/\//i.test(v)) { v = 'https://' + v; }
+		return v.replace(/[?#].*$/, '').replace(/\/(badge-host|wp-json|wp-admin)(\/.*)?$/i, '').replace(/\/+$/, '');
+	};
+	window.nebConnect = function (input) {
+		var site = nebNormalizeSite(input);
+		if (!/^https:\/\/.+\..+/i.test(site)) { return Promise.reject(new Error('Enter your site address, starting with https://')); }
+		function ask(u) {
+			return fetch(u).then(function (r) { return r.json().then(function (j) { if (!r.ok || j.plugin !== 'nfc-event-badges') { throw new Error('bad'); } return j; }); });
+		}
+		return ask(site + '/wp-json/neb/v1/app/info').catch(function () { return ask(site + '/?rest_route=/neb/v1/app/info'); }).then(function (j) {
+			var o = { site: site, api: j.api, name: j.name || site };
+			if (!/^https:\/\//i.test(o.api || '')) { throw new Error('This site is not using HTTPS.'); }
+			NEBAPP.clear(); NEBAPP.save(o); NEBAPP.site = o.site; NEBAPP.api = o.api; NEBAPP.name = o.name;
+			return o;
+		}).catch(function (e) {
+			throw new Error(e && /HTTPS/.test(e.message) ? e.message : 'Could not find the NFC Event Badges plugin at that address. Check the address and that the plugin is active.');
+		});
+	};
+	window.__nebLink = function (link) {
+		if (!link) { return; }
+		var site = nebNormalizeSite(link);
+		window.__nebPendingSite = site;
+		if (window.__nebOnLink) { window.__nebOnLink(site); }
+	};
+	if (window.NebNative && NebNative.takeLink) { var first = NebNative.takeLink(); if (first) { window.__nebLink(first); } }
+})();
+
+
+</script>
+<script>
+(function () {
+'use strict';
+
+var API = NEBAPP.api;
+var SITE = NEBAPP.name;
+var HAS_NFC = !!(window.NebNative && NebNative.hasNfc());
+
+var $ = function (id) { return document.getElementById(id); };
+var S = {
+	token: tokenGet(), me: null, tab: 'deliver', badges: [], sel: 0,
+	event: '', note: '', frag: 0, cat: '', cats: [], bf: { cat: '', tag: '' }, results: [], pending: null, link: null,
+	scanning: null, mode: '', readData: null, readErr: '',
+	showForm: false, earners: {},
+	requests: null, reqForm: null,
+	ev: { list: null, cats: [], past: false, form: null, gate: null, sel: 0, results: [], pending: null, att: {}, cm: {} },
+	team: null, tf: { user: null, scope: 'all', ids: [], can_link: false, hours: 0, users: [], editing: false }
+};
+var busy = false;
+var act = {};
+
+/* ---------- helpers ---------- */
+function tokenGet() { try { return localStorage.getItem('neb_token') || ''; } catch (e) { return ''; } }
+function tokenSet(v) { try { if (v) { localStorage.setItem('neb_token', v); } else { localStorage.removeItem('neb_token'); } } catch (e) {} }
+function esc(s) {
+	return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+		return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+	});
+}
+function toast(m) {
+	var t = $('toast'); t.textContent = m; t.className = 'on';
+	clearTimeout(toast.t); toast.t = setTimeout(function () { t.className = ''; }, 2800);
+}
+function buzz(ms) { if (navigator.vibrate) { navigator.vibrate(ms); } }
+function deviceName() { return (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || 'browser'; }
+function curBadge() { for (var i = 0; i < S.badges.length; i++) { if (S.badges[i].id === S.sel) { return S.badges[i]; } } return null; }
+function shortDate(d) { return d ? String(d).slice(0, 10) : ''; }
+
+function api(path, method, body, params) {
+	var u = API + path;
+	if (params) { u += (u.indexOf('?') > -1 ? '&' : '?') + new URLSearchParams(params).toString(); }
+	var h = { 'Content-Type': 'application/json' };
+	if (S.token) { h['X-NEB-Token'] = S.token; }
+	return fetch(u, { method: method || 'GET', headers: h, body: body ? JSON.stringify(body) : undefined })
+		.then(function (r) {
+			return r.json().catch(function () { return {}; }).then(function (j) {
+				if (!r.ok) {
+					var e = new Error(j.message || 'Request failed');
+					e.status = r.status; e.code = j.code; e.data = j.data || {};
+					throw e;
+				}
+				return j;
+			});
+		});
+}
+
+/* ---------- NFC ---------- */
+/* ===== Part 2: replaces the browser NFC code inside the app ===== */
+function startScan(mode, onRead, onFail) {
+	if (!HAS_NFC) { onFail(new Error('NFC is not available on this phone (or switched off).')); return; }
+	stopScan();
+	window.__nebTagCb = function (uid) { buzz(30); onRead(uid); };
+	NebNative.startScan();
+	S.scanning = { abort: function () { NebNative.stopScan(); window.__nebTagCb = null; } };
+	S.mode = mode;
+}
+function stopScan() { if (S.scanning) { S.scanning.abort(); S.scanning = null; S.mode = ''; } }
+
+function connectView() {
+	var pre = window.__nebPendingSite || '';
+	return '<h1>🎟️ Badge Host</h1><p class="sub">Connect the app to your event site.</p>' +
+		'<div class="card"><h2>Site address</h2><label>The address of the website that runs the badge plugin</label>' +
+		'<input id="c-site" inputmode="url" autocapitalize="none" autocomplete="off" placeholder="https://example.com" value="' + esc(pre) + '">' +
+		'<button data-act="connect">Connect</button><p class="sub" id="c-err" style="margin-top:10px"></p></div>' +
+		'<p class="sub">Tip: on the website, open <strong>Event Badges → Connect app</strong> and scan the code with this phone\'s camera. It opens this app with the address filled in.</p>';
+}
+act.connect = function (b) {
+	var v = $('c-site').value, e = $('c-err');
+	if (b) { b.disabled = true; }
+	e.textContent = 'Connecting…';
+	nebConnect(v).then(function () { window.__nebPendingSite = ''; location.reload(); }).catch(function (er) { e.textContent = er.message; if (b) { b.disabled = false; } });
+};
+act.changeSite = function () {
+	if (!confirm('Disconnect from ' + NEBAPP.name + '?')) { return; }
+	stopScan(); NEBAPP.clear(); location.reload();
+};
+window.__nebOnLink = function (site) {
+	if (NEBAPP.api && NEBAPP.site === site) { return; }
+	if (NEBAPP.api && !confirm('Switch to ' + site + '?')) { return; }
+	nebConnect(site).then(function () { location.reload(); }).catch(function (er) { toast(er.message); });
+};
+if (window.__nebPendingSite && !NEBAPP.api) { window.__nebOnLink(window.__nebPendingSite); }
+function scanErr(err) { toast(err && err.name === 'NotAllowedError' ? 'NFC permission was denied.' : ((err && err.message) || 'NFC error')); render(); }
+
+/* ---------- boot / session ---------- */
+function logoutLocal(msg) {
+	S.token = ''; tokenSet(''); S.me = null; stopScan(); render();
+	if (msg) { var el = $('l-err'); if (el) { el.textContent = msg; } }
+}
+function isMember() { return !!(S.me && S.me.role === 'member'); }
+function boot() {
+	if (!S.token) { render(); return; }
+	api('host/me').then(function (me) {
+		S.me = me;
+		if (me.role === 'member') {
+			if (['events', 'me'].indexOf(S.tab) < 0) { S.tab = 'me'; }
+			render(); return;
+		}
+		return Promise.all([api('badges'), api('categories').catch(function () { return { categories: [], tags: [] }; })]).then(function (r) {
+			S.badges = r[0]; S.cats = r[1].categories || []; S.tags = r[1].tags || [];
+			if (!curBadge()) { S.sel = S.badges.length ? S.badges[0].id : 0; }
+			render();
+		});
+	}).catch(function (e) {
+		if (e.status === 401 || e.status === 403) { logoutLocal('Your session ended. Please sign in again.'); }
+		else { render(); toast('Could not reach the server.'); }
+	});
+}
+function afterLogin(r) { S.token = r.token; tokenSet(r.token); S.tab = 'deliver'; boot(); }
+
+/* ---------- views ---------- */
+function loginView() {
+	return '<h1>\uD83C\uDF9F\uFE0F Badge Host</h1><p class="sub">' + esc(SITE) + ' \u00b7 hosts deliver badges here, everyone can sign in with a password to see their profile and events.</p>' +
+	(HAS_NFC
+		? '<div class="card"><h2>Hosts: sign in with your chip</h2><label>Your 6-digit sign-in PIN</label>' +
+		  '<input id="l-pin" type="password" inputmode="numeric" maxlength="6" autocomplete="off">' +
+		  '<button data-act="nfcLogin">Tap chip &amp; sign in</button><p class="sub" id="l-msg" style="margin-top:10px"></p></div>'
+		: '<div class="card"><p class="sub" style="margin:0">This phone has no NFC, or it is switched off. Use your password below.</p></div>') +
+	'<div class="card"><h2>Sign in with password</h2>' +
+	'<label>Username or email</label><input id="l-user" autocomplete="username" autocapitalize="none">' +
+	'<label>Password</label><input id="l-pass" type="password" autocomplete="current-password">' +
+	'<label style="display:flex;gap:8px;align-items:center;font-size:14px"><input id="l-rem" type="checkbox" style="width:auto"> Keep me signed in for 30 days</label>' +
+	'<button data-act="pwLogin">Sign in</button></div><p class="sub" id="l-err"></p><button class="sec" data-act="changeSite">Change site</button>';
+}
+
+function navHTML() {
+	var m = S.me || {};
+	var tabs = [['deliver', '\uD83C\uDFAF', 'Deliver'], ['read', '\uD83D\uDC40', 'Read']];
+	if (m.role === 'member') { tabs = []; }
+	tabs.push(['events', '\uD83D\uDCC5', 'Events']);
+	if (m.can_create) { tabs.push(['badges', '\uD83C\uDFC5', 'Badges']); }
+	if (m.can_manage_team) { tabs.push(['team', '\uD83E\uDD1D', 'Team']); }
+	tabs.push(['me', '\uD83D\uDC64', 'Me']);
+	return '<nav>' + tabs.map(function (t) {
+		return '<button class="' + (S.tab === t[0] ? 'on' : '') + '" data-act="tab" data-tab="' + t[0] + '"><span>' + t[1] + '</span>' + t[2] + '</button>';
+	}).join('') + '</nav>';
+}
+
+function dot(b) {
+	if (b.image) { return '<span class="dot"><img src="' + esc(b.image) + '" alt="" style="width:100%;height:100%;object-fit:cover"></span>'; }
+	return '<span class="dot" style="background:' + esc(b.color || '#6C5CE7') + '">' + esc(b.emoji || '\uD83C\uDFC5') + '</span>';
+}
+
+function rulesHint(b) {
+	if (!b || !b.level_rules) { return ''; }
+	var r = b.level_rules, p = [];
+	if (r.levels && r.levels.length) { p.push('levels at ' + r.levels.join(', ')); }
+	if (r.cooldown_hours > 0) { p.push('every ' + r.cooldown_hours + 'h at most'); }
+	if (r.unique_hosts) { p.push('different host each time'); }
+	if (r.unique_events) { p.push('different event each time (fill in Event)'); }
+	return '<p class="sub" style="margin:8px 0 0">\u2B06\uFE0F Level-up badge' + (p.length ? ': ' + esc(p.join(' \u00b7 ')) : '') + '</p>';
+}
+
+function fragHint(b) {
+	var f = b && b.fragment_rules;
+	if (!f) { return ''; }
+	return '<p class="sub" style="margin:8px 0 0">\uD83E\uDDE9 Fragmented badge: ' + esc(f.total) + ' pieces' + (f.needed < f.total ? ', ' + esc(f.needed) + ' needed for the full badge' : '') + '</p>';
+}
+function fragSelect(b) {
+	var o = '<option value="0">Next missing one</option>';
+	for (var i = 1; i <= b.fragment_rules.total; i++) { o += '<option value="' + i + '"' + (S.frag === i ? ' selected' : '') + '>Fragment #' + i + '</option>'; }
+	return '<label>Which fragment <small>(optional)</small></label><select id="d-frag">' + o + '</select>';
+}
+
+function resultHTML(r) {
+	if (r.error) { return '<div class="res bad"><strong>\u2716 ' + esc(r.error) + '</strong></div>'; }
+	var lv = '';
+	if (r.badge && r.badge.levelup) {
+		lv = '<br><small>Level ' + esc(r.level) + (r.max_level > 1 ? ' of ' + esc(r.max_level) : '') +
+			(r.next_level_at ? ' \u00b7 ' + esc(r.times_earned) + '/' + esc(r.next_level_at) + ' to next' : '') + '</small>';
+	}
+	if (r.fragmented && (r.awarded || r.reason === 'complete' || r.reason === 'fragment_owned')) {
+		lv += '<br><small>\uD83E\uDDE9 ' + esc(r.fragments_count) + '/' + esc(r.fragments_needed) + ' needed' + (r.complete ? ' \u00b7 full badge unlocked' : '') + '</small>';
+	}
+	if (r.points_awarded) {
+		lv += '<br><small>\u2B50 +' + esc(r.points_awarded) + ' points \u00b7 ' + esc(r.points_total) + ' in total</small>';
+	}
+	return '<div class="res ' + (r.awarded ? 'ok' : 'warn') + '"><strong>' + (r.awarded ? '\u2714 ' : '\u26A0 ') +
+		esc(r.user.name) + ' \u2014 ' + esc(r.badge.title) + '</strong><br>' + esc(r.message) + lv + visitLine(r) +
+		((r.can_request && (r.reason === 'limit_reached' || r.reason === 'ended')) ? '<br><button class="sec sm" data-act="reqFromResult" data-id="' + esc(r.badge.id) + '">Ask an admin for more</button>' : '') + '</div>';
+}
+
+var LIMIT_LABEL = { sold_out: 'limit reached', ended: 'ended', not_started: 'not started yet' };
+function limitHint(b) {
+	var l = b && b.limit;
+	if (!l) { return ''; }
+	var p = [];
+	if (l.cap > 0) { p.push(l.awarded + ' of ' + l.cap + ' given'); }
+	if (l.starts_at && l.state === 'not_started') { p.push('starts ' + l.starts_at.slice(0, 16)); }
+	if (l.ends_at) { p.push((l.state === 'ended' ? 'ended ' : 'ends ') + l.ends_at.slice(0, 16)); }
+	var tag = l.state === 'open' ? '' : ' \u2014 ' + (LIMIT_LABEL[l.state] || '');
+	return '<p class="sub" style="margin:8px 0 0">\u23F3 Limited: ' + esc(p.join(' \u00b7 ')) + esc(tag) + '</p>';
+}
+function visibleBadges() {
+	return S.cat ? S.badges.filter(function (b) { return (b.category_slugs || []).indexOf(S.cat) > -1; }) : S.badges;
+}
+function usedCats() {
+	var seen = {};
+	S.badges.forEach(function (b) { (b.category_slugs || []).forEach(function (s) { seen[s] = 1; }); });
+	return S.cats.filter(function (c) { return seen[c.slug]; });
+}
+function catFilterHTML() {
+	var c = usedCats();
+	if (!c.length) { return ''; }
+	return '<label>Category</label><select id="d-cat"><option value="">All categories</option>' + c.map(function (x) {
+		return '<option value="' + esc(x.slug) + '"' + (S.cat === x.slug ? ' selected' : '') + '>' + esc(x.name) + '</option>';
+	}).join('') + '</select>';
+}
+function chipsHTML(b) {
+	return (b.categories || []).map(function (c) { return '<span class="tag">' + esc(c.name) + '</span>'; }).join('') +
+		(b.tags || []).map(function (x) { return '<span class="tag">#' + esc(x.name) + '</span>'; }).join('');
+}
+function bfMatch(b) {
+	return (!S.bf.cat || (b.category_slugs || []).indexOf(S.bf.cat) > -1) &&
+		(!S.bf.tag || (b.tags || []).some(function (x) { return x.slug === S.bf.tag; }));
+}
+function filterBar() {
+	var cats = usedCats(), tagSeen = {}, tags = [];
+	S.badges.forEach(function (b) { (b.tags || []).forEach(function (x) { if (!tagSeen[x.slug]) { tagSeen[x.slug] = 1; tags.push(x); } }); });
+	if (!cats.length && !tags.length) { return ''; }
+	return '<div class="card" style="padding:10px">' +
+		(cats.length ? '<select id="bf-cat" style="margin-bottom:8px"><option value="">All categories</option>' + cats.map(function (x) {
+			return '<option value="' + esc(x.slug) + '"' + (S.bf.cat === x.slug ? ' selected' : '') + '>' + esc(x.name) + '</option>';
+		}).join('') + '</select>' : '') +
+		(tags.length ? '<select id="bf-tag"><option value="">All tags</option>' + tags.map(function (x) {
+			return '<option value="' + esc(x.slug) + '"' + (S.bf.tag === x.slug ? ' selected' : '') + '>#' + esc(x.name) + '</option>';
+		}).join('') + '</select>' : '') + '</div>';
+}
+function optLimit(b) { var l = b.limit; return (!l || l.state === 'open') ? '' : ' \u2014 ' + (LIMIT_LABEL[l.state] || ''); }
+
+function reqFormHTML(b) {
+	var f = S.reqForm, l = b.limit || {};
+	return '<div style="margin-top:12px;border-top:1px solid var(--line);padding-top:8px"><h2>Ask an admin for more</h2>' +
+		(l.max > 0 ? '<label>Extra awards</label><input id="q-amount" type="number" min="0" max="1000" value="' + esc(f.amount) + '">' : '') +
+		(l.ends_at ? '<label>Move the end time to <small>(optional)</small></label><input id="q-until" type="datetime-local" value="' + esc(f.until) + '">' : '') +
+		'<label>Why?</label><select id="q-type">' + [['mistake', 'A mistake'], ['special', 'Special occasion'], ['other', 'Other']].map(function (o) {
+			return '<option value="' + o[0] + '"' + (f.reason === o[0] ? ' selected' : '') + '>' + o[1] + '</option>';
+		}).join('') + '</select>' +
+		'<label>Explain</label><textarea id="q-msg" maxlength="500" placeholder="What happened or what is the occasion?">' + esc(f.message) + '</textarea>' +
+		'<button data-act="reqSend">Send request</button><button class="sec" data-act="reqCancel">Cancel</button></div>';
+}
+function requestsHTML() {
+	if (!S.requests || !S.requests.length) { return ''; }
+	return '<h2 style="margin:18px 0 8px">My requests</h2>' + S.requests.map(function (r) {
+		var asked = [r.extra_amount ? '+' + r.extra_amount + ' awards' : '', r.extend_until ? 'until ' + r.extend_until.slice(0, 16) : ''].filter(Boolean).join(' \u00b7 ');
+		var got = r.status === 'approved' ? [r.granted_amount ? '+' + r.granted_amount + ' awards' : '', r.granted_until ? 'until ' + r.granted_until.slice(0, 16) : ''].filter(Boolean).join(' \u00b7 ') : '';
+		return '<div class="card"><strong>' + esc(r.badge) + '</strong><span class="tag">' + esc(r.status) + '</span>' +
+			'<p class="sub" style="margin:6px 0 0">Asked: ' + esc(asked) + '</p>' +
+			(got ? '<p class="sub" style="margin:2px 0 0">Granted: ' + esc(got) + '</p>' : '') +
+			(r.decision_note ? '<p class="sub" style="margin:2px 0 0">Admin: ' + esc(r.decision_note) + '</p>' : '') +
+			(r.status === 'pending' ? '<button class="sec sm" data-act="reqWithdraw" data-id="' + r.id + '">Withdraw</button>' : '') + '</div>';
+	}).join('');
+}
+
+function visitLine(r) {
+	if (!r.verified || !r.visit) { return ''; }
+	var v = r.visit;
+	return '<br><small>\u2714 Verified profile \u00b7 \uD83D\uDC63 visit #' + esc(v.number) +
+		(v.previous_at ? ' \u00b7 last seen ' + esc(shortDate(v.previous_at)) : (v.number <= 1 ? ' \u00b7 first visit' : '')) + '</small>';
+}
+
+function dynHTML() {
+	var h = '';
+	if (S.pending) {
+		h += '<div class="card"><h2>\uD83D\uDD12 PIN needed</h2><p class="sub">' + esc(S.pending.msg) + '</p>' +
+			'<input id="d-pin" type="password" inputmode="numeric" maxlength="3" placeholder="3-digit PIN" autocomplete="off">' +
+			'<button data-act="submitPin">Confirm</button><button class="sec" data-act="cancelPin">Cancel</button></div>';
+	}
+	if (S.link) {
+		h += '<div class="card"><h2>Link this chip</h2><p class="sub">This chip isn\'t linked to anyone yet. Find the attendee by name:</p>' +
+			'<input id="k-q" placeholder="Search name (3+ letters)" autocomplete="off"><div id="k-res">' + linkResults() + '</div>' +
+			'<button class="sec" data-act="cancelLink">Cancel</button></div>';
+	}
+	S.results.forEach(function (r) { h += resultHTML(r); });
+	return h;
+}
+function linkResults() {
+	return ((S.link && S.link.users) || []).map(function (u) {
+		return '<button class="sec" data-act="linkUser" data-id="' + esc(u.id) + '">' + esc(u.display_name) + '</button>';
+	}).join('');
+}
+function refreshDyn() { var d = $('d-dyn'); if (d) { d.innerHTML = dynHTML(); } }
+
+function deliverView() {
+	var b = curBadge();
+	var scanning = S.scanning && S.mode === 'deliver';
+	var vis = visibleBadges();
+	var opts = vis.map(function (x) {
+		return '<option value="' + x.id + '"' + (x.id === S.sel ? ' selected' : '') + '>' + (x.type === 'personal' ? '\uD83C\uDF81 ' : '') + esc(x.title) + (x.points ? ' \u00b7 ' + esc(x.points) + ' pts' : '') + esc(optLimit(x)) + '</option>';
+	}).join('');
+	var form = S.badges.length
+		? catFilterHTML() + '<label>Badge</label><select id="d-badge">' + opts + '</select>' + rulesHint(b) + fragHint(b) + limitHint(b) +
+		  '<label>Event <small>(optional)</small></label><input id="d-event" placeholder="' + esc((b && b.event) || '') + '" value="' + esc(S.event) + '">' +
+		  (b && b.fragment_rules ? fragSelect(b) : '') + '<label>Personal note <small>(optional)</small></label><textarea id="d-note" maxlength="280">' + esc(S.note) + '</textarea>' +
+		  '<button data-act="toggleScan">' + (scanning ? 'Stop scanning' : 'Start scanning') + '</button>' +
+		  (scanning ? '<p class="sub pulse" style="margin:10px 0 0">Ready \u2014 tap attendees\' chips one after another\u2026</p>' : '') +
+		  (HAS_NFC ? '' : '<p class="sub" style="margin:10px 0 0">NFC is not available on this phone (or switched off). You can type a chip ID instead.</p>') +
+		  '<details><summary class="sub">No NFC? Enter a chip ID</summary><input id="d-manual" placeholder="e.g. 04A23B1C5D6E80" autocapitalize="characters">' +
+		  '<button class="sec" data-act="manualDeliver">Deliver</button></details>'
+		: '<p class="sub" style="margin:0">' + (S.me.can_create ? 'No badges yet. Create one in the Badges tab.' : 'No badges are assigned to you right now. Ask your host.') + '</p>';
+	return '<h1>Deliver a badge</h1><p class="sub">Pick a badge, then tap an attendee\'s chip.</p><div class="card">' + form + '</div><div id="d-dyn">' + dynHTML() + '</div>';
+}
+
+function badgeRow(b) {
+	var lv = (b.levelup && b.max_level > 1) ? ' <span class="tag">Lv ' + esc(b.level) + '</span>' : '';
+	var fr = b.fragmented ? ' <span class="tag">\uD83E\uDDE9 ' + esc(b.fragments_count) + '/' + esc(b.fragments_needed) + (b.complete ? ' complete' : '') + '</span>' : '';
+	return '<div class="row">' + dot(b) + '<div><strong>' + esc(b.title) + '</strong>' + lv + fr + '<br><small class="sub">' +
+		esc(b.event || '') + (b.awarded_at ? ' \u00b7 ' + esc(shortDate(b.awarded_at)) : '') + '</small></div></div>';
+}
+
+function readView() {
+	var d = S.readData, scanning = S.scanning && S.mode === 'read';
+	var h = '<h1>Read a chip</h1><p class="sub">See who a chip belongs to and their visible badges.</p><div class="card">' +
+		'<button data-act="readScan">' + (scanning ? 'Cancel' : 'Tap a chip to read') + '</button>' +
+		(scanning ? '<p class="sub pulse" style="margin:10px 0 0">Ready \u2014 tap a chip\u2026</p>' : '') +
+		'<details><summary class="sub">Enter a chip ID</summary><input id="r-manual" autocapitalize="characters"><button class="sec" data-act="readManual">Look up</button></details></div>';
+	if (S.readErr) { h += '<div class="res bad">' + esc(S.readErr) + '</div>'; }
+	if (d) {
+		h += '<div class="card"><h2>' + esc(d.user.name) + '</h2>';
+		if (d.events_attended != null) { h += '<p class="sub" style="margin:0 0 6px">\uD83D\uDCC5 ' + esc(d.events_attended) + ' events joined</p>'; }
+		if (d.points != null) { h += '<p class="sub" style="margin:0 0 6px">\u2B50 ' + esc(d.points) + ' points</p>'; }
+		if (d.verified && d.visit) { h += '<p class="sub" style="margin:0 0 6px">' + visitLine({ verified: true, visit: d.visit }).replace(/^<br>/, '') + '</p>'; }
+		else if (d.pin_required) { h += '<p class="sub" style="margin:0 0 6px">Not verified yet \u2014 PIN needed.</p>'; }
+		if (d.pin_required && d.badges === null) {
+			h += '<p class="sub">\uD83D\uDD12 This user has a PIN. Ask them to enter it to show their badges.</p>' +
+				'<input id="r-pin" type="password" inputmode="numeric" maxlength="3" placeholder="3-digit PIN" autocomplete="off"><button data-act="readPin">Show badges</button>';
+		} else if (!d.badges || !d.badges.length) {
+			h += '<p class="sub" style="margin:0">No public badges' + (d.private_count ? ' \u00b7 ' + esc(d.private_count) + ' private' : ' yet') + '.</p>';
+		} else {
+			h += d.badges.map(badgeRow).join('') + (d.private_count ? '<p class="sub" style="margin:0">+ ' + esc(d.private_count) + ' private</p>' : '');
+		}
+		h += '</div>';
+	}
+	return h;
+}
+
+function formHTML() {
+	return '<div class="card"><h2>New gift badge</h2>' +
+		'<label>Title</label><input id="f-title" maxlength="60">' +
+		'<div style="display:flex;gap:10px"><div style="flex:1"><label>Emoji</label><input id="f-emoji" maxlength="8" value="\uD83C\uDF81"></div>' +
+		'<div style="flex:1"><label>Colour</label><input id="f-color" type="color" value="#6c5ce7"></div></div>' +
+		'<label>Message <small>(optional)</small></label><textarea id="f-msg" maxlength="280"></textarea>' +
+		'<label>Event <small>(optional)</small></label><input id="f-event">' +
+		'<label>Date <small>(optional)</small></label><input id="f-date" type="date">' +
+		(S.cats.length ? '<label>Category <small>(optional)</small></label><select id="f-cat"><option value="">None</option>' + S.cats.map(function (c) {
+			return '<option value="' + esc(c.slug) + '">' + (c.parent ? '— ' : '') + esc(c.name) + '</option>';
+		}).join('') + '</select>' : '') +
+		'<label>Tags <small>(optional, comma separated, up to 5)</small></label><input id="f-tags" placeholder="workshop, vip">' +
+		(S.me.personal.max_points > 0 ? '<label>Points <small>(0 to ' + esc(S.me.personal.max_points) + ')</small></label><input id="f-points" type="number" min="0" max="' + esc(S.me.personal.max_points) + '" value="0">' : '') +
+		'<label style="display:flex;gap:8px;align-items:center;margin-top:12px"><input id="f-transfer" type="checkbox" style="width:auto"> Allow people to transfer this badge to someone else</label>' +
+		'<button data-act="createBadge">Create badge</button></div>';
+}
+
+function earnersHTML(id) {
+	var e = S.earners[id];
+	if (!e) { return ''; }
+	if (e.error) { return '<p class="sub">' + esc(e.error) + '</p>'; }
+	if (!e.earners.length) { return '<p class="sub">Nobody yet.</p>'; }
+	return '<p class="sub" style="margin:8px 0 0">' + esc(e.total) + ' total</p><ol style="margin:4px 0 0;padding-left:20px;font-size:14px">' +
+		e.earners.map(function (x) { return '<li>' + esc(x.name) + (x.badge_level_label || '') + ' <small class="sub">' + esc(shortDate(x.awarded_at)) + '</small></li>'; }).join('') + '</ol>';
+}
+
+function badgesView() {
+	var p = S.me.personal, h = '<h1>Badges</h1><p class="sub">' +
+		(p.limit > 0 ? esc(p.used) + ' of ' + esc(p.limit) + ' gift badges created' : 'Gift badges are turned off') + '</p>';
+	if (p.limit > 0) {
+		h += '<button class="sec" style="margin:0 0 14px" data-act="toggleForm">' + (S.showForm ? 'Close' : '\uFF0B Create a gift badge') + '</button>';
+		if (S.showForm) { h += formHTML(); }
+	}
+	h += filterBar() + S.badges.filter(bfMatch).map(function (b) {
+		return '<div class="card"><div class="row" style="margin-top:0">' + dot(b) + '<div><strong>' + esc(b.title) + '</strong>' +
+			(b.type === 'personal' ? '<span class="tag">gift</span>' : '') + (b.levelup ? '<span class="tag">levels</span>' : '') + (b.points ? '<span class="tag">\u2B50 ' + esc(b.points) + ' pts</span>' : '') + (b.transferable ? '<span class="tag">transferable</span>' : '') + (b.price ? '<span class="tag">for sale ' + esc(b.price) + '</span>' : '') + chipsHTML(b) +
+			'<br><small class="sub">' + esc(b.event || '') + (b.date ? ' \u00b7 ' + esc(b.date) : '') + '</small></div></div>' +
+			(b.message ? '<p class="sub" style="margin:0">' + esc(b.message) + '</p>' : '') + rulesHint(b) + fragHint(b) + limitHint(b) +
+			'<button class="sec sm" data-act="earners" data-id="' + b.id + '">Who got it</button>' +
+			(b.type === 'personal' && !b.levelup && !b.fragments ? '<button class="sec sm" data-act="toggleTransfer" data-id="' + b.id + '" data-on="' + (b.transferable ? '0' : '1') + '">' + (b.transferable ? 'Stop transfers' : 'Allow transfers') + '</button>' : '') +
+			(b.type === 'personal' ? '<button class="sec sm" data-act="delBadge" data-id="' + b.id + '">Delete</button>' : '') +
+			(b.limit && b.type !== 'personal' ? '<button class="sec sm" data-act="reqOpen" data-id="' + b.id + '">Ask for more</button>' : '') +
+			'<div>' + earnersHTML(b.id) + '</div>' + (S.reqForm && S.reqForm.badge_id === b.id ? reqFormHTML(b) : '') + '</div>';
+	}).join('');
+	return h + requestsHTML();
+}
+
+function meView() {
+	var m = S.me, member = isMember();
+	var roleLabel = m.role === 'admin_host' ? 'Admin host' : m.role === 'moderator' ? 'Moderator' : member ? 'Member' : 'Event host';
+	var helping = (m.teams && m.teams.length && !m.can_create) ? '<div class="card"><h2>You\'re helping</h2>' + m.teams.map(function (tm) {
+		return '<p class="sub" style="margin:0 0 8px"><strong>' + esc(tm.host) + '</strong> \u00b7 ' +
+			(tm.scope === 'all' ? 'all their badges' : esc(tm.badges.join(', '))) +
+			(tm.expires_at ? ' \u00b7 until ' + esc(tm.expires_at) : '') + (tm.can_link ? ' \u00b7 can link chips' : '') + '</p>';
+	}).join('') + '</div>' : '';
+	var chip = member
+		? '<div class="card"><h2>My chip</h2><p class="sub">' + (m.chips_linked ? '\u2705 Chip linked to your account' : 'No chip linked yet') + '</p>' +
+		  (HAS_NFC ? '<button class="sec" data-act="claimChip">' + (S.scanning && S.mode === 'claim' ? 'Cancel \u2014 tap your chip\u2026' : 'Link my chip') + '</button>' : '<p class="sub" style="margin:0">Linking a chip needs Chrome on Android.</p>') + '</div>'
+		: '<div class="card"><h2>Chip sign-in</h2><p class="sub">' + (m.chips_linked ? '\u2705 Chip linked' : 'No chip linked yet') + ' \u00b7 ' +
+		  (m.signin_pin_set ? '\u2705 sign-in PIN set' : 'no sign-in PIN yet') + '</p>' +
+		  (HAS_NFC ? '<button class="sec" data-act="claimChip">' + (S.scanning && S.mode === 'claim' ? 'Cancel \u2014 tap your chip\u2026' : 'Link my chip') + '</button>' : '') +
+		  '<label>New 6-digit sign-in PIN</label><input id="m-pin" type="password" inputmode="numeric" maxlength="6" autocomplete="off">' +
+		  '<label>Account password (to confirm)</label><input id="m-pw" type="password" autocomplete="current-password">' +
+		  '<button data-act="setPin">' + (m.signin_pin_set ? 'Change PIN' : 'Set PIN') + '</button>' +
+		  (m.signin_pin_set ? '<button class="sec" data-act="removePin">Remove PIN</button>' : '') +
+		  '<p class="sub" style="margin:10px 0 0">Signing in with a chip needs the chip <em>and</em> this PIN.</p></div>';
+	return '<h1>' + esc(m.user.name) + '</h1><p class="sub">Signed in as ' + esc(roleLabel.toLowerCase()) + '</p>' + helping +
+		'<div class="card"><h2>\u2B50 My profile</h2><div id="m-prof"><p class="sub" style="margin:0">Loading\u2026</p></div></div>' +
+		'<div class="card"><h2>\uD83D\uDC4D Commendations</h2><div id="m-cm"><p class="sub" style="margin:0">Loading\u2026</p></div></div>' +
+		'<div class="card"><h2>\uD83D\uDD12 Anti-cloning PIN</h2><div id="m-pc"><p class="sub" style="margin:0">Loading\u2026</p></div></div>' +
+		chip +
+		'<div class="card"><h2>\uD83D\uDCCA Site stats</h2><div id="m-st"><p class="sub" style="margin:0">Loading\u2026</p></div></div>' +
+		(member ? '' : '<div class="card"><h2>Recent deliveries</h2><div id="m-act"><p class="sub">Loading\u2026</p></div></div>') +
+		'<button class="sec" data-act="changeSite">Change site</button><button class="danger" data-act="logout">Sign out</button>';
+}
+function profHTML() {
+	var p = S.prof, pt = p.pts;
+	var h = '<p style="margin:0"><strong>\u2B50 ' + esc(pt.balance) + ' points</strong>' + (pt.spent > 0 ? ' <small class="sub">(earned ' + esc(pt.points) + ', spent ' + esc(pt.spent) + ')</small>' : '') + '</p>' +
+		'<p class="sub" style="margin:2px 0 8px">' + (pt.rank ? 'Rank #' + esc(pt.rank) + ' of ' + esc(pt.players) + ' players' : 'Earn points to join the leaderboard.') + (pt.from_events ? ' \u00b7 ' + esc(pt.from_events) + ' from events' : '') + '</p>' +
+		'<label style="display:flex;gap:8px;align-items:center;font-size:14px;color:var(--text)"><input type="checkbox" id="pf-name" style="width:auto"' + (p.priv.show_name ? ' checked' : '') + '> Show my name in lists and on my public profile</label>' +
+		'<h2 style="margin-top:14px">Badges (' + p.badges.length + ')</h2>';
+	h += p.badges.length ? p.badges.map(function (b) {
+		return '<div class="row">' + dot(b) + '<div style="flex:1"><strong>' + esc(b.title) + '</strong>' + (b.levelup && b.max_level > 1 ? '<span class="tag">Lv ' + esc(b.level) + '</span>' : '') +
+			'<br><small class="sub">' + esc(b.event || '') + (b.awarded_at ? ' \u00b7 ' + esc(shortDate(b.awarded_at)) : '') + ' \u00b7 ' + (b.hidden ? 'private' : 'shown on profile') + '</small></div>' +
+			'<button class="sec sm" style="margin:0" data-act="pfToggle" data-id="' + b.id + '" data-hidden="' + (b.hidden ? '1' : '0') + '">' + (b.hidden ? 'Show' : 'Hide') + '</button></div>';
+	}).join('') : '<p class="sub" style="margin:0">No badges yet \u2014 join an event!</p>';
+	h += '<h2 style="margin-top:14px">Going to</h2>' + (p.events.length ? p.events.map(function (e) {
+		return '<p class="sub" style="margin:0 0 6px"><strong style="color:var(--text)">' + esc(e.title) + '</strong><br>' + esc(e.date_label) + ' \u00b7 ' + esc(e.time_label) + (e.place || e.city ? ' \u00b7 ' + esc([e.place, e.city].filter(Boolean).join(', ')) : '') + '<br><button class="sec sm" data-act="passShow" data-id="' + e.id + '">\uD83C\uDFAB Show my pass</button></p>';
+	}).join('') : '<p class="sub" style="margin:0">No upcoming events. Find one in the Events tab.</p>');
+	return h;
+}
+function loadProfile() {
+	Promise.all([api('me/points'), api('me/badges'), api('me/privacy'), api('events', 'GET', null, { mine: 1, when: 'upcoming' }).catch(function () { return { events: [] }; })]).then(function (r) {
+		S.prof = { pts: r[0], badges: r[1], priv: r[2], events: r[3].events || [] };
+		var el = $('m-prof'); if (el) { el.innerHTML = profHTML(); }
+	}).catch(function () { var el = $('m-prof'); if (el) { el.innerHTML = '<p class="sub">Could not load.</p>'; } });
+}
+function loadPin() {
+	api('me/pin').then(function (r) {
+		var el = $('m-pc'); if (!el) { return; }
+		el.innerHTML = '<p class="sub" style="margin:0 0 6px">' + (r.set ? '\u2705 A 3-digit PIN protects your badges if someone clones your chip.' : 'No PIN set. A 3-digit PIN stops a cloned chip from claiming badges.') + '</p>' +
+			'<input id="pc-pin" type="password" inputmode="numeric" maxlength="3" placeholder="3-digit PIN" autocomplete="off">' +
+			'<input id="pc-pw" type="password" placeholder="Account password' + (r.set ? ' (needed to change or remove)' : '') + '" autocomplete="current-password" style="margin-top:8px">' +
+			'<button data-act="pcSet">' + (r.set ? 'Change PIN' : 'Set PIN') + '</button>' + (r.set ? '<button class="sec" data-act="pcRemove">Remove PIN</button>' : '');
+	}).catch(function () {});
+}
+function loadActivity() {
+	api('host/activity').then(function (list) {
+		var el = $('m-act'); if (!el) { return; }
+		el.innerHTML = list.length ? list.map(function (a) {
+			return '<div class="row" style="margin:6px 0"><div><strong>' + esc(a.name) + '</strong> \u2014 ' + esc(a.title) +
+				'<br><small class="sub">' + esc(a.awarded_at) + (a.event ? ' \u00b7 ' + esc(a.event) : '') + (a.by ? ' \u00b7 by ' + esc(a.by) : '') + '</small></div></div>';
+		}).join('') : '<p class="sub" style="margin:0">Nothing delivered yet.</p>';
+	}).catch(function () { var el = $('m-act'); if (el) { el.innerHTML = '<p class="sub">Could not load.</p>'; } });
+}
+
+function render() {
+	var app = $('app');
+	if (!NEBAPP.api) { app.innerHTML = connectView(); return; }
+	if (!S.token || !S.me) { app.innerHTML = loginView(); return; }
+	var v = S.tab === 'read' ? readView() : S.tab === 'badges' ? badgesView() : S.tab === 'team' ? teamView() : S.tab === 'events' ? eventsView() : S.tab === 'me' ? meView() : deliverView();
+	app.innerHTML = v + navHTML();
+	if (S.tab === 'me') { if (!isMember()) { loadActivity(); } loadCommends(); loadStats(); loadProfile(); loadPin(); }
+}
+
+/* ---------- events ---------- */
+function evPublicCard(e) {
+	var tags = (e.cancelled ? '<span class="tag">cancelled</span>' : '') + (e.full ? '<span class="tag">full</span>' : '') + (e.checked_in ? '<span class="tag">\u2714 you were there</span>' : e.rsvp ? '<span class="tag">\u2705 going</span>' : '');
+	var action = '';
+	if (!e.cancelled && !e.past) {
+		if (e.rsvp) { action = '<button class="sm" data-act="passShow" data-id="' + e.id + '">\uD83C\uDFAB Show my pass</button><button class="sec sm" data-act="evRsvp" data-id="' + e.id + '" data-on="0">Cancel my spot</button>' + (e.my_card === false ? '<p class="sub" style="margin:8px 0 0">\uD83E\uDEAA You have no member card yet. Ask the host for one at the event.</p>' : ''); }
+		else if (e.requires && !e.requires.met) { action = '<p class="sub" style="margin:8px 0 0">\uD83D\uDD12 Needs ' + esc(e.requires.badges.map(function (b) { return b.title; }).join(e.requires.mode === 'all' ? ' + ' : ' or ')) + '</p>'; }
+		else if (e.full) { action = ''; }
+		else { action = '<button class="sm" data-act="evRsvp" data-id="' + e.id + '" data-on="1">I\'m going</button>'; }
+	}
+	var cm = (e.commend && e.commend.length) ? '<h2 style="margin-top:12px">\uD83D\uDC4D Commend the team</h2>' + e.commend.map(function (t) {
+		var x = '<p class="sub" style="margin:6px 0 0">' + esc(t.user.name) + ' (' + esc(t.user.role_label) + ')</p>';
+		if (t.given) { return x + '<p style="margin:2px 0">\u2714 ' + esc(t.given.emoji) + ' ' + esc(t.given.label) + '</p><button class="sec sm" data-act="evMUncommend" data-event="' + e.id + '" data-user="' + t.user.id + '">Withdraw</button>'; }
+		return x + t.types.map(function (ty) { return '<button class="sec sm" data-act="evMCommend" data-event="' + e.id + '" data-user="' + t.user.id + '" data-type="' + esc(ty.slug) + '">' + esc(ty.emoji) + ' ' + esc(ty.label) + (ty.special ? ' \u2728' : '') + '</button>'; }).join('');
+	}).join('') : '';
+	return '<div class="card"><div><strong>' + esc(e.title) + '</strong>' + tags + '</div>' +
+		'<p class="sub" style="margin:4px 0 0">' + esc(e.date_label) + ' \u00b7 ' + esc(e.time_label) + (e.end_label ? ' \u2013 ' + esc(e.end_label) : '') + (e.place || e.city ? ' \u00b7 ' + esc([e.place, e.city].filter(Boolean).join(', ')) : '') + '</p>' +
+		'<p class="sub" style="margin:2px 0 0">Host: ' + esc(e.host.name) + (e.host.commended ? ' \uD83D\uDC4D ' + esc(e.host.commended) : '') + (e.team.length ? ' \u00b7 with ' + e.team.map(function (t) { return esc(t.name); }).join(', ') : '') + '</p>' +
+		(e.description ? '<p class="sub" style="margin:6px 0 0">' + esc(e.description) + '</p>' : '') +
+		((e.badges.length || e.counts_toward.length || e.points) ? '<p class="sub" style="margin:6px 0 0">Earn: ' + e.badges.map(function (b) { return esc(b.title); }).concat(e.counts_toward.map(function (c) { return esc(c.badge.title) + ' \u2191'; })).join(', ') + (e.points ? ' \u00b7 \u2B50 +' + esc(e.points) + ' pts' : '') + '</p>' : '') +
+		(e.capacity ? '<p class="sub" style="margin:2px 0 0">' + (e.full ? 'All ' + esc(e.capacity) + ' spots taken' : esc(e.spots_left) + ' of ' + esc(e.capacity) + ' spots left') + '</p>' : '') +
+		action + cm + '</div>';
+}
+function memberEventsView() {
+	var h = '<h1>Events</h1><p class="sub">Reserve a spot and see what you can earn.</p>' +
+		'<label style="display:flex;gap:8px;align-items:center;font-size:14px"><input type="checkbox" style="width:auto" id="ev-past"' + (S.ev.past ? ' checked' : '') + '> My past events</label>';
+	if (!S.ev.list) { return h + '<p class="sub">Loading\u2026</p>'; }
+	return h + (S.ev.list.length ? S.ev.list.map(evPublicCard).join('') : '<p class="sub">' + (S.ev.past ? 'No past events yet.' : 'No upcoming events yet.') + '</p>');
+}
+function swapEvent(ev) { S.ev.list = (S.ev.list || []).map(function (x) { return x.id === ev.id ? ev : x; }); render(); }
+act.evRsvp = function (b) {
+	api('events/' + b.dataset.id + '/rsvp', b.dataset.on === '1' ? 'POST' : 'DELETE').then(function (r) { toast(r.message); swapEvent(r.event); }).catch(function (e) { toast(e.message); });
+};
+act.evMCommend = function (b) {
+	var id = parseInt(b.dataset.event, 10);
+	api('commend', 'POST', { event_id: id, to_user: parseInt(b.dataset.user, 10), type: b.dataset.type })
+		.then(function (r) { toast(r.message); return api('events/' + id); }).then(swapEvent).catch(function (e) { toast(e.message); });
+};
+act.evMUncommend = function (b) {
+	var id = parseInt(b.dataset.event, 10);
+	api('commend', 'DELETE', { event_id: id, to_user: parseInt(b.dataset.user, 10) })
+		.then(function () { toast('Commendation withdrawn.'); return api('events/' + id); }).then(swapEvent).catch(function (e) { toast(e.message); });
+};
+function loadEvents() {
+	if (isMember()) {
+		api('events', 'GET', null, S.ev.past ? { when: 'past', mine: 1, limit: 50 } : { when: 'upcoming', limit: 50 }).then(function (r) {
+			S.ev.list = r.events; if (S.tab === 'events') { render(); }
+		}).catch(function (e) { toast(e.message); });
+		return;
+	}
+	var p = { managed: 1, when: S.ev.past ? 'past' : 'upcoming' };
+	var jobs = [api('events', 'GET', null, p)];
+	if (S.me.can_manage_team && !S.team) { jobs.push(api('host/team').then(function (t) { S.team = t; }).catch(function () {})); }
+	Promise.all(jobs).then(function (r) {
+		S.ev.list = r[0].events; S.ev.cats = r[0].categories || [];
+		if (S.tab === 'events') { render(); }
+	}).catch(function (e) { toast(e.message); });
+}
+function selEvent() { var l = S.ev.list || []; for (var i = 0; i < l.length; i++) { if (l[i].id === S.ev.sel) { return l[i]; } } return null; }
+function dtLocal(v) { return v ? String(v).replace(' ', 'T').slice(0, 16) : ''; }
+function evBlank() {
+	return { id: 0, title: '', description: '', start: '', end: '', place: '', address: '', city: '', lat: '', lng: '', capacity: '', spare_cards: '', points: 0, categories: [], badges: [], team: [], req: [], req_mode: 'any' };
+}
+function evGateBox() {
+	var f = S.ev.form, g = S.ev.gate, locked = g && !g.allowed;
+	var status = !g ? '<p class="sub" style="margin:0 0 8px">Set a location, then check what you can add.</p>'
+		: g.allowed ? '<p class="sub" style="margin:0 0 8px">✅ ' + (g.bypass ? 'You are an admin: no limits.' : g.found + ' open events nearby — points and requirements are available (max ' + esc(g.max_points) + ' points).') + '</p>'
+		: '<p class="sub" style="margin:0 0 8px">🔒 ' + esc(g.message) + '</p>';
+	var badgeBoxes = S.badges.map(function (b) {
+		return '<label style="display:flex;gap:8px;align-items:center;font-size:14px;color:var(--text)"><input type="checkbox" style="width:auto" data-efl="req" data-id="' + b.id + '"' + (f.req.indexOf(b.id) > -1 ? ' checked' : '') + (locked ? ' disabled' : '') + '> ' + esc(b.title) + '</label>';
+	}).join('');
+	return status + '<button class="sec sm" data-act="evGate">Check availability</button>' +
+		'<label>Points for attending' + (g && !g.bypass ? ' <small>(max ' + esc(g.max_points) + ')</small>' : '') + '</label><input data-ef="points" type="number" min="0" value="' + esc(f.points) + '"' + (locked ? ' disabled' : '') + '>' +
+		'<label>Badges people must hold to join <small>(optional)</small></label>' + (badgeBoxes || '<p class="sub">No badges.</p>') +
+		'<label>Needs</label><select data-ef="req_mode"' + (locked ? ' disabled' : '') + '><option value="any"' + (f.req_mode === 'any' ? ' selected' : '') + '>Any one of them</option><option value="all"' + (f.req_mode === 'all' ? ' selected' : '') + '>All of them</option></select>';
+}
+function evFormHTML() {
+	var f = S.ev.form;
+	var cats = (S.ev.cats || []).map(function (c) {
+		return '<label style="display:flex;gap:8px;align-items:center;font-size:14px;color:var(--text)"><input type="checkbox" style="width:auto" data-efl="categories" data-id="' + c.id + '"' + (f.categories.indexOf(c.id) > -1 ? ' checked' : '') + '> ' + (c.parent ? '— ' : '') + esc(c.name) + (c.level_badge ? ' <small>🏅 levels up</small>' : '') + '</label>';
+	}).join('');
+	var badges = S.badges.map(function (b) {
+		return '<label style="display:flex;gap:8px;align-items:center;font-size:14px;color:var(--text)"><input type="checkbox" style="width:auto" data-efl="badges" data-id="' + b.id + '"' + (f.badges.indexOf(b.id) > -1 ? ' checked' : '') + '> ' + esc(b.title) + '</label>';
+	}).join('');
+	var team = ((S.team && S.team.moderators) || []).filter(function (m) { return !m.expired; }).map(function (m) {
+		return '<label style="display:flex;gap:8px;align-items:center;font-size:14px;color:var(--text)"><input type="checkbox" style="width:auto" data-efl="team" data-id="' + m.user_id + '"' + (f.team.indexOf(m.user_id) > -1 ? ' checked' : '') + '> ' + esc(m.name) + '</label>';
+	}).join('');
+	return '<div class="card"><h2>' + (f.id ? 'Edit event' : 'New event') + '</h2>' +
+		'<label>Title</label><input data-ef="title" maxlength="120" value="' + esc(f.title) + '">' +
+		'<label>Starts</label><input data-ef="start" type="datetime-local" value="' + esc(f.start) + '">' +
+		'<label>Ends <small>(optional, default 2 hours)</small></label><input data-ef="end" type="datetime-local" value="' + esc(f.end) + '">' +
+		'<label>Venue</label><input data-ef="place" value="' + esc(f.place) + '">' +
+		'<label>Address</label><input data-ef="address" value="' + esc(f.address) + '">' +
+		'<label>City</label><input data-ef="city" value="' + esc(f.city) + '">' +
+		'<div style="display:flex;gap:10px"><div style="flex:1"><label>Latitude</label><input data-ef="lat" inputmode="decimal" value="' + esc(f.lat) + '"></div><div style="flex:1"><label>Longitude</label><input data-ef="lng" inputmode="decimal" value="' + esc(f.lng) + '"></div></div>' +
+		'<button class="sec sm" data-act="evLocate">📍 Use my location</button>' +
+		'<label>Description <small>(optional)</small></label><textarea data-ef="description" maxlength="3000">' + esc(f.description) + '</textarea>' +
+		'<label>Max people <small>(empty = no limit)</small></label><input data-ef="capacity" type="number" min="0" value="' + esc(f.capacity) + '">' +
+		'<label>Spare member cards you will bring <small>(for people who have no card yet)</small></label><input data-ef="spare_cards" type="number" min="0" value="' + esc(f.spare_cards) + '">' +
+		(cats ? '<label>Categories</label>' + cats : '') +
+		'<label>Badges people earn by visiting</label>' + (badges || '<p class="sub">No badges yet.</p>') +
+		(team ? '<label>Team (your moderators)</label>' + team : '') +
+		'<h2 style="margin-top:16px">Points and requirements</h2><div id="ev-gate-box">' + evGateBox() + '</div>' +
+		'<button data-act="evSave">' + (f.id ? 'Save changes' : 'Create event') + '</button><button class="sec" data-act="evCancelForm">Cancel</button></div>';
+}
+function cmHTML(eventId, userId) {
+	var list = (S.ev.cm[eventId] || {}).as_staff || [], ent = null;
+	for (var i = 0; i < list.length; i++) { if (list[i].user.id === userId) { ent = list[i]; } }
+	if (!ent) { return ''; }
+	if (ent.given) {
+		return '<br><small class="sub">\u2714 Commended: ' + esc(ent.given.emoji) + ' ' + esc(ent.given.label) + '</small> <button class="sec sm" style="margin:0" data-act="evUncommend" data-event="' + eventId + '" data-user="' + userId + '">Withdraw</button>';
+	}
+	if (!ent.can) { return ''; }
+	return '<details><summary class="sub">\uD83D\uDC4D Commend</summary>' + ent.types.map(function (t) {
+		return '<button class="sec sm" data-act="evCommend" data-event="' + eventId + '" data-user="' + userId + '" data-type="' + esc(t.slug) + '">' + esc(t.emoji) + ' ' + esc(t.label) + (t.special ? ' \u2728' : '') + '</button>';
+	}).join('') + '</details>';
+}
+function cardNotice(e) {
+	if (e.need_card == null) { return ''; }
+	var n = e.need_card, sp = e.spare_cards || 0;
+	if (!n && !sp) { return ''; }
+	var warn = n > sp;
+	return '<p class="sub" style="margin:6px 0 0;' + (warn ? 'color:var(--warn)' : '') + '">\uD83E\uDEAA ' +
+		(n ? n + (n === 1 ? ' reserved person has' : ' reserved people have') + ' no member card yet' : 'Everyone reserved has a member card') +
+		' \u00b7 you have ' + sp + ' spare' + (warn ? ' \u2014 bring ' + (n - sp) + ' more' : (n ? ' \u2014 enough, set them up at the door' : '')) + '</p>';
+}
+function evCard(e) {
+	var tags = (e.cancelled ? '<span class="tag">cancelled</span>' : '') + (e.capacity ? '<span class="tag">' + esc(e.taken) + '/' + esc(e.capacity) + ' people</span>' : (e.taken ? '<span class="tag">' + esc(e.taken) + ' people</span>' : '')) +
+		(e.points ? '<span class="tag">⭐ ' + esc(e.points) + ' pts</span>' : '') + (e.requires ? '<span class="tag">🔒 badge needed</span>' : '');
+	var att = S.ev.att[e.id];
+	var attHTML = '';
+	if (att) {
+		attHTML = att.error ? '<p class="sub">' + esc(att.error) + '</p>' : (att.attendees.length ? att.attendees.map(function (a) {
+			return '<div class="row" style="margin:4px 0"><div>' + (a.checked_in ? '✔ ' : '🎟 ') + esc(a.name) + (a.has_card === false ? ' <span class="tag">🪪 needs a card</span>' : '') + cmHTML(e.id, a.id) + '</div></div>';
+		}).join('') : '<p class="sub">Nobody yet.</p>');
+	}
+	return '<div class="card"><div><strong>' + esc(e.title) + '</strong>' + tags + '</div>' +
+		'<p class="sub" style="margin:4px 0 0">' + esc(e.date_label) + ' · ' + esc(e.time_label) + (e.place || e.city ? ' · ' + esc([e.place, e.city].filter(Boolean).join(', ')) : '') + '</p>' +
+		'<p class="sub" style="margin:2px 0 0">Host: ' + esc(e.host.name) + (e.team.length ? ' · Team: ' + e.team.map(function (t) { return esc(t.name); }).join(', ') : '') + '</p>' +
+		(e.badges.length ? '<p class="sub" style="margin:2px 0 0">🏅 ' + e.badges.map(function (b) { return esc(b.title); }).join(', ') + '</p>' : '') +
+		(e.counts_toward.length ? '<p class="sub" style="margin:2px 0 0">↑ Levels up: ' + e.counts_toward.map(function (c) { return esc(c.badge.title); }).join(', ') + '</p>' : '') +
+		cardNotice(e) +
+		(e.cancelled ? '' : '<button class="sm" data-act="evSelect" data-id="' + e.id + '">' + (S.ev.sel === e.id ? 'Checking in…' : 'Check in') + '</button>') +
+		'<button class="sec sm" data-act="evAtt" data-id="' + e.id + '">Who\'s coming</button>' +
+		(e.can_edit ? '<button class="sec sm" data-act="evEdit" data-id="' + e.id + '">Edit</button><button class="sec sm" data-act="evDelete" data-id="' + e.id + '">' + (e.taken ? 'Cancel event' : 'Delete') + '</button>' : '') +
+		(attHTML ? '<div style="margin-top:8px">' + attHTML + '</div>' : '') + '</div>';
+}
+function evResultHTML(r) {
+	if (r.error) { return '<div class="res bad"><strong>✖ ' + esc(r.error) + '</strong></div>'; }
+	var h = '<div class="res ' + (r.checked_in ? 'ok' : 'warn') + '"><strong>' + (r.checked_in ? '✔ ' : '⚠ ') + esc(r.user.name) + '</strong><br>' + esc(r.message);
+	(r.results || []).forEach(function (x) { h += '<br><small>' + (x.awarded ? '🏅 ' : '• ') + esc(x.badge.title) + ' — ' + esc(x.message) + '</small>'; });
+	(r.category_levels || []).forEach(function (c) {
+		h += '<br><small>' + (c.leveled_up ? '🎉 Level up! ' : c.new ? '🆕 ' : '↑ ') + esc(c.badge.title) + ' · level ' + esc(c.level) + (c.next_level_at ? ' · ' + esc(c.count) + '/' + esc(c.next_level_at) + ' to next' : ' · max') + '</small>';
+	});
+	if (r.needs_card) { h += '<br><small>\uD83E\uDEAA No member card yet' + (r.spare_cards ? ' \u2014 you have ' + esc(r.spare_cards) + ' spare' : ' \u2014 no spares left') + '</small>'; }
+	if (r.points_awarded) { h += '<br><small>⭐ +' + esc(r.points_awarded) + ' points · ' + esc(r.points_total) + ' in total</small>'; }
+	return h + visitLine(r) + '</div>';
+}
+function evDynHTML() {
+	var h = passResHTML();
+	if (S.ev.pending) {
+		h += '<div class="card"><h2>🔒 PIN needed</h2><p class="sub">' + esc(S.ev.pending.msg) + '</p>' +
+			'<input id="ev-pin" type="password" inputmode="numeric" maxlength="3" placeholder="3-digit PIN" autocomplete="off">' +
+			'<button data-act="evPin">Confirm</button><button class="sec" data-act="evPinCancel">Cancel</button></div>';
+	}
+	S.ev.results.forEach(function (r) { h += evResultHTML(r); });
+	return h;
+}
+function passResHTML() {
+	var r = S.ev.passRes; if (!r) { return ''; }
+	if (r.error) { return '<div class="res bad"><strong>\u2716 ' + esc(r.error) + '</strong></div>'; }
+	return '<div class="res ' + (r.has_card ? 'ok' : 'warn') + '"><strong>' + (r.checked_in ? '\u2714 ' : '\uD83C\uDFAB ') + esc(r.user.name) + '</strong><br>' + esc(r.message) +
+		(r.checked_in ? '<br><small>Already checked in.</small>' : '') +
+		(r.checked_in ? '' : '<button class="sm" data-act="passCheckin">Check in</button>') +
+		(r.needs_card && r.can_link ? '<button class="sec sm" data-act="passCard">' + (S.scanning && S.mode === 'card' ? 'Cancel \u2014 tap the new card\u2026' : 'Set up a card now') + '</button>' : '') +
+		'<button class="sec sm" data-act="passDismiss">Dismiss</button></div>';
+}
+function passVerify(raw) {
+	var e = selEvent(); if (!e) { return; }
+	api('events/' + e.id + '/pass/verify', 'POST', { pass: raw }).then(function (r) {
+		r.raw = raw; S.ev.passRes = r; buzz(r.valid ? 60 : 200);
+	}).catch(function (er) {
+		S.ev.passRes = { error: er.message };
+		if (er.status === 401) { logoutLocal('Your session ended. Please sign in again.'); }
+	}).then(refreshEvDyn);
+}
+act.passLookup = function () { var v = $('pass-code').value.trim(); if (v) { passVerify(v); } };
+act.passDismiss = function () { S.ev.passRes = null; stopScan(); render(); };
+act.passCheckin = function () { var r = S.ev.passRes; if (r && r.raw) { checkIn('', '', r.raw); } };
+act.passCard = function () {
+	var r = S.ev.passRes, e = selEvent(); if (!r || !e) { return; }
+	if (S.scanning && S.mode === 'card') { stopScan(); refreshEvDyn(); return; }
+	startScan('card', function (uid) {
+		stopScan();
+		api('events/' + e.id + '/pass/card', 'POST', { pass: r.raw, uid: uid }).then(function (x) {
+			toast(x.message); r.has_card = true; r.needs_card = false; r.spare_cards = x.spare_cards;
+			r.message = 'Card linked. You have ' + x.spare_cards + ' spare left.'; loadEventsQuiet();
+		}).catch(function (er) { toast(er.message); }).then(refreshEvDyn);
+	}, scanErr);
+	refreshEvDyn();
+};
+/* camera scanning for pass QR codes (needs BarcodeDetector, available in Chrome and Android WebView on most phones) */
+var camStream = null, camTimer = null;
+function camStop() {
+	if (camTimer) { clearInterval(camTimer); camTimer = null; }
+	if (camStream) { camStream.getTracks().forEach(function (t) { t.stop(); }); camStream = null; }
+	var o = $('cam-ov'); if (o) { o.remove(); }
+}
+act.passCam = function () {
+	if (!('BarcodeDetector' in window) || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+		toast('Camera scanning is not supported on this phone. Type the code instead.'); return;
+	}
+	var det = new BarcodeDetector({ formats: ['qr_code'] });
+	navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } }).then(function (st) {
+		camStream = st;
+		var o = document.createElement('div'); o.id = 'cam-ov';
+		o.style.cssText = 'position:fixed;inset:0;background:#000;z-index:60;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:16px';
+		o.innerHTML = '<video id="cam-v" playsinline muted style="width:100%;max-width:420px;border-radius:12px"></video><p class="sub" style="color:#fff">Point the camera at the QR code\u2026</p><button class="sec" data-act="camCancel" style="max-width:420px;color:#fff;border-color:#fff">Cancel</button>';
+		document.body.appendChild(o);
+		var v = $('cam-v'); v.srcObject = st; v.play();
+		camTimer = setInterval(function () {
+			det.detect(v).then(function (codes) {
+				if (codes.length && /^NEB1\./.test(codes[0].rawValue)) { var raw = codes[0].rawValue; camStop(); passVerify(raw); }
+			}).catch(function () {});
+		}, 300);
+	}).catch(function () { toast('Could not open the camera. Allow camera access, or type the code.'); });
+};
+act.camCancel = function () { camStop(); };
+/* the attendee's own pass */
+function showPass(id) {
+	api('events/' + id + '/pass').then(function (p) {
+		var d = document.createElement('div'); d.id = 'pass-ov';
+		d.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:50;display:flex;align-items:center;justify-content:center;padding:16px';
+		d.innerHTML = '<div class="card" style="max-width:340px;width:100%;text-align:center;margin:0"><h2>\uD83C\uDFAB ' + esc(p.event.title) + '</h2>' +
+			'<div style="background:#fff;padding:8px;border-radius:12px;display:inline-block">' + window.nebQRSvg(p.payload, 240) + '</div>' +
+			'<p style="font-size:22px;letter-spacing:2px;margin:10px 0 2px"><strong>' + esc(p.code) + '</strong></p>' +
+			'<p class="sub" style="margin:0">' + esc(p.name) + ' \u00b7 ' + esc(p.event.date_label) + ' ' + esc(p.event.time_label) + '</p>' +
+			'<p class="sub">' + (p.has_card ? '' : '\uD83E\uDEAA ') + esc(p.message) + '</p><button data-act="passClose">Close</button></div>';
+		document.body.appendChild(d);
+	}).catch(function (e) { toast(e.message); });
+}
+act.passShow = function (b) { showPass(parseInt(b.dataset.id, 10)); };
+act.passClose = function () { var o = $('pass-ov'); if (o) { o.remove(); } };
+function refreshEvDyn() { var d = $('ev-dyn'); if (d) { d.innerHTML = evDynHTML(); } }
+function checkinPanel() {
+	var e = selEvent();
+	if (!e) { return ''; }
+	var scanning = S.scanning && S.mode === 'checkin';
+	return '<div class="card"><h2>Check in: ' + esc(e.title) + '</h2>' +
+		'<p class="sub">Tap each attendee\'s chip. They get ' + (e.badges.length ? esc(e.badges.map(function (b) { return b.title; }).join(', ')) : 'no event badges') + (e.counts_toward.length ? ' and level up ' + esc(e.counts_toward.map(function (c) { return c.badge.title; }).join(', ')) : '') + (e.points ? ' and ⭐ ' + esc(e.points) + ' points' : '') + '.</p>' +
+		'<button data-act="evScan">' + (scanning ? 'Stop scanning' : 'Start scanning') + '</button>' +
+		(scanning ? '<p class="sub pulse" style="margin:10px 0 0">Ready — tap chips one after another…</p>' : '') +
+		(HAS_NFC ? '' : '<p class="sub" style="margin:10px 0 0">NFC is not available on this phone (or switched off). You can type a chip ID instead.</p>') +
+		'<h2 style="margin-top:16px">\uD83C\uDFAB Pre-registered pass</h2><p class="sub">For people who forgot their card or don\'t have one yet: scan the QR code on their phone, or type the code under it.</p>' +
+		'<button class="sec" data-act="passCam">Scan a pass with the camera</button>' +
+		'<input id="pass-code" placeholder="Pass code, e.g. 42-K7M29XPD" autocapitalize="characters" autocomplete="off" style="margin-top:10px"><button class="sec" data-act="passLookup">Look up code</button>' +
+		'<details><summary class="sub">Enter a chip ID</summary><input id="ev-manual" autocapitalize="characters"><button class="sec" data-act="evManual">Check in</button></details>' +
+		'<button class="sec" data-act="evSelect" data-id="0">Close</button></div><div id="ev-dyn">' + evDynHTML() + '</div>';
+}
+function eventsView() {
+	if (isMember()) { return memberEventsView(); }
+	var m = S.me, h = '<h1>Events</h1><p class="sub">' + (m.can_create ? 'Create events and check people in.' : 'Events you help at. Check people in here.') + '</p>';
+	if (m.can_create) { h += '<button class="sec" style="margin:0 0 14px" data-act="evNew">' + (S.ev.form ? 'Close' : '＋ Create an event') + '</button>'; }
+	if (S.ev.form) { h += evFormHTML(); }
+	h += checkinPanel();
+	h += '<label style="display:flex;gap:8px;align-items:center;font-size:14px"><input type="checkbox" style="width:auto" id="ev-past"' + (S.ev.past ? ' checked' : '') + '> Show past events</label>';
+	if (!S.ev.list) { return h + '<p class="sub">Loading…</p>'; }
+	return h + (S.ev.list.length ? S.ev.list.map(evCard).join('') : '<p class="sub">' + (S.ev.past ? 'No past events.' : 'No upcoming events yet.') + '</p>');
+}
+function evBody() {
+	var f = S.ev.form;
+	return {
+		title: f.title.trim(), description: f.description, start: f.start, end: f.end, place: f.place, address: f.address, city: f.city,
+		lat: f.lat, lng: f.lng, capacity: parseInt(f.capacity, 10) || 0, spare_cards: parseInt(f.spare_cards, 10) || 0, categories: f.categories, badges: f.badges, team: f.team,
+		points: parseInt(f.points, 10) || 0, req: f.req, req_mode: f.req_mode
+	};
+}
+function checkIn(uid, pin, pass) {
+	var e = selEvent();
+	if (!e || busy || S.ev.pending) { return; }
+	busy = true;
+	var body = pass ? { pass: pass } : { uid: uid }; if (pin) { body.pin = pin; }
+	api('events/' + e.id + '/checkin', 'POST', body).then(function (r) {
+		S.ev.pending = null;
+		if (pass) { S.ev.passRes = null; }
+		S.ev.results.unshift(r); S.ev.results = S.ev.results.slice(0, 5);
+		buzz(r.checked_in ? [60, 40, 60] : 200);
+		if ((r.category_levels || []).some(function (c) { return c.leveled_up; })) { toast('🎉 Level up!'); }
+		loadEventsQuiet();
+	}).catch(function (er) {
+		if (er.data && er.data.pin_required) { S.ev.pending = { uid: uid, msg: er.message }; }
+		else {
+			S.ev.pending = null;
+			S.ev.results.unshift({ error: er.message + (er.code === 'neb_chip_unregistered' ? ' Link it from the Deliver tab first.' : '') }); S.ev.results = S.ev.results.slice(0, 5);
+			if (er.status === 401) { logoutLocal('Your session ended. Please sign in again.'); }
+		}
+	}).then(function () { busy = false; refreshEvDyn(); });
+}
+function loadEventsQuiet() {
+	api('events', 'GET', null, { managed: 1, when: S.ev.past ? 'past' : 'upcoming' }).then(function (r) { S.ev.list = r.events; }).catch(function () {});
+}
+function checkGate() {
+	var f = S.ev.form; if (!f) { return; }
+	var p = { lat: f.lat, lng: f.lng, city: f.city };
+	if (f.id) { p.event_id = f.id; }
+	api('events/gate', 'GET', null, p).then(function (g) { S.ev.gate = g; var b = $('ev-gate-box'); if (b) { b.innerHTML = evGateBox(); } }).catch(function (e) { toast(e.message); });
+}
+act.evNew = function () { S.ev.form = S.ev.form ? null : evBlank(); S.ev.gate = null; render(); };
+act.evCancelForm = function () { S.ev.form = null; render(); };
+act.evGate = function () { checkGate(); };
+act.evLocate = function () {
+	if (!navigator.geolocation) { toast('Location is not available on this device.'); return; }
+	navigator.geolocation.getCurrentPosition(function (pos) {
+		S.ev.form.lat = pos.coords.latitude.toFixed(6); S.ev.form.lng = pos.coords.longitude.toFixed(6);
+		render(); checkGate();
+	}, function () { toast('Could not get your location.'); }, { enableHighAccuracy: false, timeout: 10000 });
+};
+act.evSave = function () {
+	var f = S.ev.form, body = evBody();
+	if (!body.title) { toast('Give the event a title.'); return; }
+	if (!body.start) { toast('Choose when it starts.'); return; }
+	api(f.id ? 'events/' + f.id : 'events', 'POST', body).then(function () {
+		toast(f.id ? 'Event saved.' : 'Event created.'); S.ev.form = null; S.ev.gate = null; loadEvents();
+	}).catch(function (e) {
+		if (e.data && e.data.gate) { S.ev.gate = e.data.gate; var b = $('ev-gate-box'); if (b) { b.innerHTML = evGateBox(); } }
+		toast(e.message);
+	});
+};
+act.evEdit = function (b) {
+	var id = parseInt(b.dataset.id, 10), e = (S.ev.list || []).filter(function (x) { return x.id === id; })[0];
+	if (!e) { return; }
+	S.ev.form = {
+		id: e.id, title: e.title, description: e.description, start: dtLocal(e.start), end: dtLocal(e.end), place: e.place, address: e.address, city: e.city,
+		lat: e.lat == null ? '' : e.lat, lng: e.lng == null ? '' : e.lng, capacity: e.capacity || '', spare_cards: e.spare_cards || '', points: e.points || 0,
+		categories: e.categories.map(function (c) { return c.id; }), badges: e.badges.map(function (x) { return x.id; }), team: e.team.map(function (t) { return t.id; }),
+		req: e.requires ? e.requires.badges.map(function (x) { return x.id; }) : [], req_mode: e.requires ? e.requires.mode : 'any'
+	};
+	S.ev.gate = null; render(); checkGate();
+	window.scrollTo(0, 0);
+};
+act.evDelete = function (b) {
+	var id = parseInt(b.dataset.id, 10);
+	if (!window.confirm('Remove this event? If people were already checked in it will be marked as cancelled instead.')) { return; }
+	api('events/' + id, 'DELETE').then(function (r) { toast(r.message || 'Event deleted.'); loadEvents(); }).catch(function (e) { toast(e.message); });
+};
+act.evAtt = function (b) {
+	var id = parseInt(b.dataset.id, 10);
+	if (S.ev.att[id]) { delete S.ev.att[id]; render(); return; }
+	Promise.all([api('events/' + id + '/attendees'), api('events/' + id + '/commendations').catch(function () { return { as_staff: [] }; })]).then(function (r) {
+		S.ev.att[id] = r[0]; S.ev.cm[id] = r[1];
+	}).catch(function (e) { S.ev.att[id] = { error: e.message, attendees: [] }; }).then(render);
+};
+function reloadCommends(id) {
+	return api('events/' + id + '/commendations').then(function (c) { S.ev.cm[id] = c; render(); });
+}
+act.evCommend = function (b) {
+	var id = parseInt(b.dataset.event, 10);
+	api('commend', 'POST', { event_id: id, to_user: parseInt(b.dataset.user, 10), type: b.dataset.type })
+		.then(function (r) { toast(r.message); return reloadCommends(id); }).catch(function (e) { toast(e.message); });
+};
+act.evUncommend = function (b) {
+	var id = parseInt(b.dataset.event, 10);
+	api('commend', 'DELETE', { event_id: id, to_user: parseInt(b.dataset.user, 10) })
+		.then(function () { toast('Commendation withdrawn.'); return reloadCommends(id); }).catch(function (e) { toast(e.message); });
+};
+act.pfToggle = function (b) {
+	api('me/badges/' + b.dataset.id + '/visibility', 'POST', { hidden: b.dataset.hidden === '0' }).then(loadProfile).catch(function (e) { toast(e.message); });
+};
+act.pcSet = function () {
+	var pin = $('pc-pin').value, pw = $('pc-pw').value;
+	if (!/^\d{3}$/.test(pin)) { toast('The PIN is 3 digits.'); return; }
+	api('me/pin', 'POST', { pin: pin, password: pw }).then(function () { toast('PIN saved.'); loadPin(); }).catch(function (e) { toast(e.message); });
+};
+act.pcRemove = function () {
+	api('me/pin', 'DELETE', { password: $('pc-pw').value }).then(function () { toast('PIN removed.'); loadPin(); }).catch(function (e) { toast(e.message); });
+};
+document.addEventListener('change', function (e) {
+	if (e.target.id === 'pf-name') {
+		api('me/privacy', 'POST', { show_name: e.target.checked }).then(function () { toast('Saved.'); }).catch(function (er) { toast(er.message); });
+	}
+});
+function loadStats() {
+	api('stats').then(function (st) {
+		var el = $('m-st'); if (!el) { return; }
+		var r = st.repeat;
+		el.innerHTML = '<p class="sub" style="margin:0 0 6px">' + esc(st.users.total) + ' users \u00b7 ' + esc(st.events.total) + ' events (' + esc(st.events.upcoming) + ' upcoming) \u00b7 ' + esc(st.badges.total) + ' badges \u00b7 ' + esc(st.badges.awarded) + ' earned</p>' +
+			(r.percent == null ? '<p class="sub" style="margin:0">No event check-ins yet.</p>' : '<p style="margin:0"><strong>' + esc(r.percent) + '%</strong> <span class="sub">of people who joined an event have joined ' + esc(r.threshold) + ' or more (' + esc(r.attended_threshold_or_more) + ' of ' + esc(r.attended_one_or_more) + ')</span></p>');
+	}).catch(function () {});
+}
+function loadCommends() {
+	api('me/commendations').then(function (c) {
+		var el = $('m-cm'); if (!el) { return; }
+		el.innerHTML = c.total
+			? '<p class="sub" style="margin:0 0 6px">\uD83D\uDC4D ' + esc(c.total) + ' in total \u00b7 you gave ' + esc(c.given) + '</p>' + c.items.map(function (i) {
+				return '<span class="tag" style="margin:2px 6px 2px 0">' + esc(i.emoji) + ' ' + esc(i.label) + (i.special ? ' \u2728' : '') + ' \u00d7 ' + esc(i.count) + '</span>';
+			}).join('')
+			: '<p class="sub" style="margin:0">No commendations yet. You gave ' + esc(c.given) + '.</p>';
+	}).catch(function () {});
+}
+act.evSelect = function (b) {
+	stopScan();
+	var id = parseInt(b.dataset.id, 10);
+	S.ev.sel = S.ev.sel === id ? 0 : id; S.ev.results = []; S.ev.pending = null; render();
+	if (S.ev.sel) { window.scrollTo(0, 0); }
+};
+act.evScan = function () {
+	if (S.scanning && S.mode === 'checkin') { stopScan(); render(); return; }
+	startScan('checkin', function (uid) { checkIn(uid); }, scanErr);
+	if (S.scanning) { render(); }
+};
+act.evManual = function () { var v = $('ev-manual').value.trim(); if (v) { checkIn(v); } };
+act.evPin = function () {
+	var pin = $('ev-pin').value;
+	if (!/^\d{3}$/.test(pin)) { toast('The PIN is 3 digits.'); return; }
+	var uid = S.ev.pending.uid; S.ev.pending = null; checkIn(uid, pin);
+};
+act.evPinCancel = function () { S.ev.pending = null; refreshEvDyn(); };
+
+/* ---------- delivering ---------- */
+function deliver(uid, pin, force) {
+	if (!force && (busy || S.pending || S.link)) { return; }
+	var b = curBadge();
+	if (!b) { toast('Choose a badge first.'); return; }
+	busy = true;
+	var body = { uid: uid, badge_id: b.id };
+	if (pin) { body.pin = pin; }
+	if (S.event.trim()) { body.event = S.event.trim(); }
+	if (S.note.trim()) { body.note = S.note.trim(); }
+	if (b.fragment_rules && S.frag) { body.fragment = S.frag; }
+	api('scan', 'POST', body).then(function (r) {
+		S.pending = null; S.link = null;
+		S.results.unshift(r); S.results = S.results.slice(0, 5);
+		buzz(r.awarded ? [60, 40, 60] : 200);
+		if (r.leveled_up) { toast('\uD83C\uDF89 Level up!'); }
+	}).catch(function (e) {
+		if (e.data && e.data.pin_required) { S.pending = { uid: uid, msg: e.message }; }
+		else if (e.code === 'neb_chip_unregistered' && S.me.can_link) { S.link = { uid: uid, users: [] }; S.pending = null; }
+		else {
+			S.pending = null;
+			S.results.unshift({ error: e.message }); S.results = S.results.slice(0, 5);
+			if (e.status === 401) { logoutLocal('Your session ended. Please sign in again.'); }
+		}
+	}).then(function () { busy = false; refreshDyn(); });
+}
+
+/* ---------- actions ---------- */
+act.tab = function (b) { stopScan(); S.tab = b.dataset.tab; render(); if (S.tab === 'team') { loadTeam(); } if (S.tab === 'badges') { loadRequests(); } if (S.tab === 'events') { loadEvents(); } };
+
+act.pwLogin = function () {
+	var err = $('l-err'); err.textContent = '';
+	api('host/login', 'POST', { username: $('l-user').value.trim(), password: $('l-pass').value, remember: $('l-rem').checked, device: deviceName() })
+		.then(afterLogin).catch(function (e) { err.textContent = e.message; });
+};
+act.nfcLogin = function () {
+	var msg = $('l-msg'), pin = $('l-pin').value;
+	if (!/^\d{6}$/.test(pin)) { msg.textContent = 'Enter your 6-digit PIN first.'; return; }
+	msg.className = 'sub pulse'; msg.textContent = 'Hold your host chip against the back of the phone\u2026';
+	startScan('login', function (uid) {
+		stopScan();
+		api('host/nfc-login', 'POST', { uid: uid, pin: pin, device: deviceName() }).then(afterLogin).catch(function (e) {
+			msg.className = 'sub'; msg.textContent = e.message;
+		});
+	}, function (err) { msg.className = 'sub'; msg.textContent = (err && err.message) || 'NFC error'; });
+};
+
+act.toggleScan = function () {
+	if (S.scanning && S.mode === 'deliver') { stopScan(); render(); return; }
+	startScan('deliver', function (uid) { deliver(uid); }, scanErr);
+	if (S.scanning) { render(); }
+};
+act.manualDeliver = function () { var v = $('d-manual').value.trim(); if (v) { deliver(v); } };
+act.submitPin = function () {
+	var pin = $('d-pin').value;
+	if (!/^\d{3}$/.test(pin)) { toast('The PIN is 3 digits.'); return; }
+	deliver(S.pending.uid, pin, true);
+};
+act.cancelPin = function () { S.pending = null; refreshDyn(); };
+act.cancelLink = function () { S.link = null; refreshDyn(); };
+act.linkUser = function (b) {
+	var uid = S.link.uid;
+	api('chips/register', 'POST', { uid: uid, user_id: parseInt(b.dataset.id, 10) }).then(function () {
+		S.link = null; toast('Chip linked.'); refreshDyn(); deliver(uid, '', true);
+	}).catch(function (e) { toast(e.message); });
+};
+
+function lookup(uid, pin) {
+	api('lookup', 'POST', pin ? { uid: uid, pin: pin } : { uid: uid }).then(function (r) {
+		S.readData = r; S.readUid = uid; S.readErr = '';
+	}).catch(function (e) {
+		S.readErr = e.message;
+		if (!(e.data && e.data.pin_required)) { S.readData = null; }
+	}).then(render);
+}
+act.readScan = function () {
+	if (S.scanning && S.mode === 'read') { stopScan(); render(); return; }
+	startScan('read', function (uid) { stopScan(); lookup(uid); }, scanErr);
+	if (S.scanning) { render(); }
+};
+act.readManual = function () { var v = $('r-manual').value.trim(); if (v) { lookup(v); } };
+act.readPin = function () {
+	var pin = $('r-pin').value;
+	if (!/^\d{3}$/.test(pin)) { toast('The PIN is 3 digits.'); return; }
+	lookup(S.readUid, pin);
+};
+
+act.toggleForm = function () { S.showForm = !S.showForm; render(); };
+act.createBadge = function () {
+	var title = $('f-title').value.trim();
+	if (!title) { toast('Give the badge a title.'); return; }
+	api('badges/create', 'POST', {
+		title: title, emoji: $('f-emoji').value, color: $('f-color').value,
+		message: $('f-msg').value, event: $('f-event').value, date: $('f-date').value,
+		category: $('f-cat') ? $('f-cat').value : '', tags: $('f-tags').value,
+		points: $('f-points') ? (parseInt($('f-points').value, 10) || 0) : 0,
+		transferable: $('f-transfer') ? $('f-transfer').checked : false
+	}).then(function (b) {
+		S.showForm = false; S.sel = b.id; toast('Badge created.');
+		return Promise.all([api('host/me'), api('badges')]).then(function (r) { S.me = r[0]; S.badges = r[1]; render(); });
+	}).catch(function (e) { toast(e.message); });
+};
+act.toggleTransfer = function (b) {
+	var id = parseInt(b.dataset.id, 10), on = b.dataset.on === '1';
+	api('badges/' + id + '/transferable', 'POST', { transferable: on }).then(function () {
+		toast(on ? 'Transfers allowed.' : 'Transfers stopped.');
+		return api('badges').then(function (r) { S.badges = r; render(); });
+	}).catch(function (e) { toast(e.message); });
+};
+act.delBadge = function (b) {
+	var id = parseInt(b.dataset.id, 10);
+	if (!window.confirm('Delete this gift badge? This can\'t be undone.')) { return; }
+	api('badges/' + id, 'DELETE').then(function () {
+		return Promise.all([api('host/me'), api('badges')]).then(function (r) { S.me = r[0]; S.badges = r[1]; if (!curBadge()) { S.sel = S.badges.length ? S.badges[0].id : 0; } render(); });
+	}).catch(function (e) { toast(e.message); });
+};
+act.earners = function (b) {
+	var id = parseInt(b.dataset.id, 10);
+	if (S.earners[id]) { delete S.earners[id]; render(); return; }
+	api('badges/' + id + '/earners', 'GET', null, { per_page: 50 }).then(function (r) {
+		r.earners.forEach(function (x) { x.badge_level_label = (r.badge.levelup && x.level > 1) ? ' (Lv ' + x.level + ')' : ''; });
+		S.earners[id] = r;
+	}).catch(function (e) { S.earners[id] = { error: e.message }; }).then(render);
+};
+
+act.claimChip = function () {
+	if (S.scanning && S.mode === 'claim') { stopScan(); render(); return; }
+	startScan('claim', function (uid) {
+		stopScan();
+		api('chips/claim', 'POST', { uid: uid }).then(function () { toast('Chip linked to your account.'); return api('host/me'); })
+			.then(function (m) { if (m) { S.me = m; } }).catch(function (e) { toast(e.message); }).then(render);
+	}, scanErr);
+	if (S.scanning) { render(); }
+};
+act.setPin = function () {
+	var pin = $('m-pin').value, pw = $('m-pw').value;
+	if (!/^\d{6}$/.test(pin)) { toast('The sign-in PIN is 6 digits.'); return; }
+	api('host/signin-pin', 'POST', { pin: pin, password: pw }).then(function () { toast('Sign-in PIN saved.'); return api('host/me'); })
+		.then(function (m) { S.me = m; render(); }).catch(function (e) { toast(e.message); });
+};
+act.removePin = function () {
+	api('host/signin-pin', 'DELETE', { password: $('m-pw').value }).then(function () { toast('Sign-in PIN removed.'); return api('host/me'); })
+		.then(function (m) { S.me = m; render(); }).catch(function (e) { toast(e.message); });
+};
+act.logout = function () {
+	api('host/logout', 'POST').catch(function () {}).then(function () { logoutLocal(); });
+};
+
+/* ---------- limit requests ---------- */
+function loadRequests() {
+	api('host/requests').then(function (r) { S.requests = r; if (S.tab === 'badges') { render(); } }).catch(function () {});
+}
+function openReq(id) {
+	S.reqForm = { badge_id: id, amount: 5, until: '', reason: 'mistake', message: '' };
+	S.tab = 'badges'; render();
+}
+act.reqOpen = function (b) { openReq(parseInt(b.dataset.id, 10)); };
+act.reqFromResult = function (b) { stopScan(); openReq(parseInt(b.dataset.id, 10)); loadRequests(); };
+act.reqCancel = function () { S.reqForm = null; render(); };
+act.reqSend = function () {
+	var f = S.reqForm;
+	var body = { badge_id: f.badge_id, extra_amount: parseInt(f.amount, 10) || 0, reason_type: f.reason, message: f.message };
+	if (f.until) { body.extend_until = f.until; }
+	api('host/requests', 'POST', body).then(function () {
+		S.reqForm = null; toast('Request sent. An admin will review it.'); loadRequests(); render();
+	}).catch(function (e) { toast(e.message); });
+};
+act.reqWithdraw = function (b) {
+	api('host/requests/' + parseInt(b.dataset.id, 10), 'DELETE').then(function () { toast('Request withdrawn.'); loadRequests(); }).catch(function (e) { toast(e.message); });
+};
+document.addEventListener('input', function (e) {
+	if (!S.reqForm) { return; }
+	if (e.target.id === 'q-amount') { S.reqForm.amount = e.target.value; }
+	else if (e.target.id === 'q-until') { S.reqForm.until = e.target.value; }
+	else if (e.target.id === 'q-msg') { S.reqForm.message = e.target.value; }
+});
+document.addEventListener('change', function (e) {
+	if (S.reqForm && e.target.id === 'q-type') { S.reqForm.reason = e.target.value; }
+	if (S.reqForm && e.target.id === 'q-until') { S.reqForm.until = e.target.value; }
+});
+
+/* ---------- team (admin hosts) ---------- */
+function tfResults() {
+	return (S.tf.users || []).map(function (u) {
+		return '<button class="sec" data-act="tfPick" data-id="' + esc(u.id) + '">' + esc(u.display_name) + '</button>';
+	}).join('');
+}
+function teamForm() {
+	var f = S.tf;
+	var who = f.user
+		? '<div class="row" style="margin:0"><strong>' + esc(f.user.name) + '</strong>' + (f.editing ? '' : '<button class="sec sm" data-act="tfChange">Change</button>') + '</div>'
+		: '<label>Find a person by name</label><input id="t-q" placeholder="Search name (3+ letters)" autocomplete="off"><div id="t-res">' + tfResults() + '</div>';
+	var picks = S.badges.map(function (b) {
+		return '<label style="display:flex;gap:8px;align-items:center;font-size:14px;margin:6px 0;color:var(--text)"><input type="checkbox" data-bid="' + b.id + '"' +
+			(f.ids.indexOf(b.id) > -1 ? ' checked' : '') + ' style="width:auto"> ' + (b.type === 'personal' ? '\uD83C\uDF81 ' : '') + esc(b.title) + '</label>';
+	}).join('');
+	var hours = [[0, 'Until I remove them'], [12, '12 hours'], [24, '24 hours'], [72, '3 days'], [168, '7 days']];
+	if (f.editing) { hours.unshift([-1, 'Keep as it is']); }
+	return '<div class="card"><h2>' + (f.editing ? 'Edit moderator' : 'Add a moderator') + '</h2>' + who +
+		'<label>Which badges can they deliver?</label><select id="t-scope"><option value="all"' + (f.scope === 'all' ? ' selected' : '') + '>All my badges</option>' +
+		'<option value="selected"' + (f.scope === 'selected' ? ' selected' : '') + '>Only the ones I pick</option></select>' +
+		(f.scope === 'selected' ? '<div>' + picks + '</div>' : '') +
+		'<label style="display:flex;gap:8px;align-items:center;font-size:14px;color:var(--text)"><input id="t-link" type="checkbox" style="width:auto"' + (f.can_link ? ' checked' : '') + '> Can link new chips to people</label>' +
+		'<label>Access lasts</label><select id="t-hours">' + hours.map(function (o) {
+			return '<option value="' + o[0] + '"' + (f.hours === o[0] ? ' selected' : '') + '>' + o[1] + '</option>';
+		}).join('') + '</select>' +
+		'<button data-act="tfSave">' + (f.editing ? 'Save changes' : 'Add moderator') + '</button>' +
+		(f.editing ? '<button class="sec" data-act="tfCancel">Cancel</button>' : '') + '</div>';
+}
+function teamView() {
+	var tm = S.team;
+	var h = '<h1>Team</h1><p class="sub">Moderators help you deliver badges at big events.' + (tm ? ' ' + esc(tm.moderators.length) + ' of ' + esc(tm.limit) + ' added.' : '') + '</p>';
+	if (!tm) { return h + '<p class="sub">Loading\u2026</p>'; }
+	if (tm.limit < 1) { return h + '<p class="sub">Moderators are turned off on this site.</p>'; }
+	h += teamForm();
+	h += tm.moderators.map(function (m) {
+		return '<div class="card"><strong>' + esc(m.name) + '</strong>' + (m.expired ? '<span class="tag">expired</span>' : '') + (m.can_link ? '<span class="tag">links chips</span>' : '') +
+			'<p class="sub" style="margin:6px 0 0">' + esc(m.badge_scope === 'all' ? 'All my badges' : m.badges.join(', ')) + '</p>' +
+			'<p class="sub" style="margin:2px 0 0">' + (m.expires_at ? (m.expired ? 'Ended ' : 'Until ') + esc(m.expires_at) : 'Until you remove them') + '</p>' +
+			'<button class="sec sm" data-act="tfEdit" data-id="' + m.user_id + '">Edit</button><button class="sec sm" data-act="tfRemove" data-id="' + m.user_id + '">Remove</button></div>';
+	}).join('');
+	return h;
+}
+function tfReset() { S.tf = { user: null, scope: 'all', ids: [], can_link: false, hours: 0, users: [], editing: false }; }
+function loadTeam() {
+	api('host/team').then(function (r) { S.team = r; if (S.tab === 'team') { render(); } }).catch(function (e) { toast(e.message); });
+}
+act.tfChange = function () { S.tf.user = null; S.tf.users = []; render(); };
+act.tfCancel = function () { tfReset(); render(); };
+act.tfPick = function (b) {
+	var id = parseInt(b.dataset.id, 10);
+	var u = S.tf.users.filter(function (x) { return x.id === id; })[0];
+	if (u) { S.tf.user = { id: u.id, name: u.display_name }; S.tf.users = []; render(); }
+};
+act.tfEdit = function (b) {
+	var id = parseInt(b.dataset.id, 10);
+	var m = S.team.moderators.filter(function (x) { return x.user_id === id; })[0];
+	if (!m) { return; }
+	S.tf = { user: { id: m.user_id, name: m.name }, scope: m.badge_scope, ids: m.badge_ids.slice(), can_link: m.can_link, hours: -1, users: [], editing: true };
+	render(); window.scrollTo(0, 0);
+};
+act.tfSave = function () {
+	var f = S.tf;
+	if (!f.user) { toast('Choose a person first.'); return; }
+	if (f.scope === 'selected' && !f.ids.length) { toast('Pick at least one badge.'); return; }
+	api('host/team', 'POST', { user_id: f.user.id, badge_scope: f.scope, badge_ids: f.ids, can_link: f.can_link, expires_in_hours: f.hours })
+		.then(function (r) { S.team = r; tfReset(); toast('Moderator saved.'); render(); })
+		.catch(function (e) { toast(e.message); });
+};
+act.tfRemove = function (b) {
+	var id = parseInt(b.dataset.id, 10);
+	if (!window.confirm('Remove this moderator? They will no longer be able to deliver your badges.')) { return; }
+	api('host/team/' + id, 'DELETE').then(function (r) { S.team = r; toast('Moderator removed.'); render(); }).catch(function (e) { toast(e.message); });
+};
+var team_t;
+document.addEventListener('input', function (e) {
+	if (e.target.id !== 't-q') { return; }
+	var q = e.target.value.trim();
+	clearTimeout(team_t);
+	team_t = setTimeout(function () {
+		if (q.length < 3) { S.tf.users = []; var r0 = $('t-res'); if (r0) { r0.innerHTML = ''; } return; }
+		api('host/users', 'GET', null, { q: q }).then(function (users) {
+			S.tf.users = users; var r1 = $('t-res'); if (r1) { r1.innerHTML = tfResults(); }
+		}).catch(function () {});
+	}, 350);
+});
+document.addEventListener('change', function (e) {
+	var el = e.target;
+	if (el.id === 't-scope') { S.tf.scope = el.value; render(); }
+	else if (el.id === 't-link') { S.tf.can_link = el.checked; }
+	else if (el.id === 't-hours') { S.tf.hours = parseInt(el.value, 10); }
+	else if (el.dataset && el.dataset.bid) {
+		var id = parseInt(el.dataset.bid, 10), i = S.tf.ids.indexOf(id);
+		if (el.checked && i < 0) { S.tf.ids.push(id); } else if (!el.checked && i > -1) { S.tf.ids.splice(i, 1); }
+	}
+});
+
+/* ---------- events ---------- */
+document.addEventListener('click', function (e) {
+	var b = e.target.closest('[data-act]');
+	if (b && act[b.dataset.act]) { act[b.dataset.act](b); }
+});
+document.addEventListener('change', function (e) {
+	if (e.target.id === 'd-badge') { S.sel = parseInt(e.target.value, 10); S.frag = 0; render(); }
+	else if (e.target.id === 'd-frag') { S.frag = parseInt(e.target.value, 10) || 0; }
+	else if (e.target.id === 'd-cat') {
+		S.cat = e.target.value;
+		var v = visibleBadges();
+		if (v.length && !v.some(function (x) { return x.id === S.sel; })) { S.sel = v[0].id; S.frag = 0; }
+		render();
+	}
+	else if (e.target.id === 'bf-cat') { S.bf.cat = e.target.value; render(); }
+	else if (e.target.id === 'bf-tag') { S.bf.tag = e.target.value; render(); }
+});
+document.addEventListener('input', function (e) {
+	var id = e.target.id;
+	if (id === 'd-event') { S.event = e.target.value; }
+	else if (id === 'd-note') { S.note = e.target.value; }
+	else if (id === 'k-q' && S.link) {
+		var q = e.target.value.trim();
+		clearTimeout(input_t);
+		input_t = setTimeout(function () {
+			if (q.length < 3) { S.link.users = []; var r0 = $('k-res'); if (r0) { r0.innerHTML = ''; } return; }
+			api('host/users', 'GET', null, { q: q }).then(function (users) {
+				if (!S.link) { return; }
+				S.link.users = users; var r1 = $('k-res'); if (r1) { r1.innerHTML = linkResults(); }
+			}).catch(function () {});
+		}, 350);
+	}
+});
+var input_t;
+document.addEventListener('input', function (e) {
+	var k = e.target.dataset && e.target.dataset.ef;
+	if (k && S.ev.form) { S.ev.form[k] = e.target.value; }
+});
+document.addEventListener('change', function (e) {
+	var t = e.target, d = t.dataset || {};
+	if (d.ef && S.ev.form) {
+		S.ev.form[d.ef] = t.value;
+		if (d.ef === 'city' || d.ef === 'lat' || d.ef === 'lng') { checkGate(); }
+	} else if (d.efl && S.ev.form) {
+		var list = S.ev.form[d.efl], id = parseInt(d.id, 10), i = list.indexOf(id);
+		if (t.checked && i < 0) { list.push(id); } else if (!t.checked && i > -1) { list.splice(i, 1); }
+	} else if (t.id === 'ev-past') { S.ev.past = t.checked; S.ev.list = null; render(); loadEvents(); }
+});
+document.addEventListener('keydown', function (e) {
+	if (e.key === 'Enter' && e.target.id === 'l-pass') { act.pwLogin(); }
+});
+
+boot();
+})();
+</script>
+</body>
+</html>

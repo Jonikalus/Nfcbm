@@ -1,0 +1,42 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.nfceventbadges.app'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'com.nfceventbadges.app'
+        minSdk 24
+        targetSdk 34
+        versionCode 1
+        versionName '1.0.0'
+    }
+
+    // Optional release signing: pass these as gradle properties or environment variables
+    // (see README). Without them, `assembleRelease` produces an unsigned APK.
+    def ksFile = System.getenv('NEB_KEYSTORE') ?: (project.findProperty('NEB_KEYSTORE') ?: '')
+    if (ksFile) {
+        signingConfigs {
+            release {
+                storeFile file(ksFile)
+                storePassword System.getenv('NEB_KEYSTORE_PASSWORD') ?: project.findProperty('NEB_KEYSTORE_PASSWORD')
+                keyAlias System.getenv('NEB_KEY_ALIAS') ?: project.findProperty('NEB_KEY_ALIAS')
+                keyPassword System.getenv('NEB_KEY_PASSWORD') ?: project.findProperty('NEB_KEY_PASSWORD')
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            if (ksFile) { signingConfig signingConfigs.release }
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
